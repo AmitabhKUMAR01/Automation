@@ -1,0 +1,23 @@
+# Env files
+.env
+.env.backup
+.env.production
+
+# Virtual environment
+venv/
+
+# Python cache
+__pycache__/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Scheduler tracker
+app/core/last_job_tracker.json
+
+.vscode/
+pyrefly.toml
+
+# Playwright session state (contains sensitive cookies!)
+storage_state.json

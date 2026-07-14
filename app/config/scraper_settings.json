@@ -1,0 +1,14 @@
+{
+    "schedule_times": ["16:26", "15:00", "18:00"],
+    "jobs": [
+        { "category": "Clubs", "city": "New York", "state": "NY", "country": "United States" },
+        { "category": "Gyms", "city": "London", "state": "", "country": "United Kingdom" },
+        { "category": "Restaurants", "city": "Paris", "state": "", "country": "France" },
+        { "category": "Coffee Shops", "city": "Berlin", "state": "", "country": "Germany" },
+        { "category": "Gyms", "city": "Madrid", "state": "", "country": "Spain" },
+        { "category": "Restaurants", "city": "Rome", "state": "", "country": "Italy" },
+        { "category": "Coffee Shops", "city": "Amsterdam", "state": "", "country": "Netherlands" },
+        { "category": "Gyms", "city": "Dublin", "state": "", "country": "Ireland" },
+        { "category": "Restaurants", "city": "Vienna", "state": "", "country": "Austria" }
+    ]
+}

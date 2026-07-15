@@ -14,6 +14,7 @@ import app.models.linkedin_contact
 import app.models.profile_setting
 import app.models.scheduler_job_run
 import app.models.linkedin_search_config
+import app.models.linkedin_search_contact
 from app.config.database import Base
 import os
 import sys

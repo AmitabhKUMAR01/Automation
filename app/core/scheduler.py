@@ -9,7 +9,7 @@ import threading
 from app.services.sheet_exporter import export_to_google_sheet
 from app.services.website_audit_service import run_audit_job
 from app.services.lead_scoring_service import run_lead_score_job
-from app.services.linkedin_service import run_linkedin_batch_job, run_linkedin_daily_connections, run_linkedin_acceptance_check
+from app.services.linkedin_service import run_linkedin_batch_job, run_linkedin_daily_connections, run_linkedin_acceptance_check, run_linkedin_search_and_connect
 from app.services.pitch_delivery_service import run_pitch_delivery_job
 from app.services.pitch_reply_service import run_pitch_reply_check_job
 from datetime import datetime, timezone, timedelta
@@ -17,7 +17,7 @@ from app.models.profile_setting import ProfileSetting
 from app.models.scheduler_job_run import SchedulerJobRun
 from app.services.notification_service import notify_job_failure
 from app.utils.logger import logger
-
+from app.models.linkedin_search_config import LinkedinSearchConfig
 
 TRACKER_FILE = os.path.join(os.path.dirname(__file__), "last_job_tracker.json")
 LOCK_FILE    = os.path.join(os.path.dirname(__file__), "job.lock")  # ADDED: lock file
@@ -104,7 +104,7 @@ def _run_job_for_profiles(job_name: str, func):
         db.close()
 
 def scheduled_linkedin_batch():
-    _run_job_for_profiles("daily_linkedin_search", run_linkedin_batch_job)
+    _run_job_for_profiles("daily_linkedin_search", run_linkedin_search_and_connect)
 
 def scheduled_linkedin_connections():
     _run_job_for_profiles("daily_linkedin_connections", run_linkedin_daily_connections)
@@ -227,6 +227,46 @@ def _update_run(
 
 # ── Job Scheduling ─────────────────────────────────────────────────────────────
 
+def _get_linkedin_search_schedule() -> tuple[int, int]:
+    """
+    Read the schedule time from the active LinkedinSearchConfig row.
+    Falls back to LINKEDIN_SCHEDULE_HOUR / LINKEDIN_SCHEDULE_MINUTE env vars.
+    Converts from IST (UTC+5:30) to UTC for APScheduler.
+    """
+    try:
+        db = SessionLocal()
+        try:
+            config = (
+                db.query(LinkedinSearchConfig)
+                .filter(LinkedinSearchConfig.is_active == True)  # noqa: E712
+                .first()
+            )
+            if config and config.schedule_time:
+                time_str = config.schedule_time  # e.g. "14:00"
+                hour_ist, minute_ist = map(int, time_str.split(":"))
+                # Convert IST (UTC+5:30) → UTC
+                total_minutes_utc = hour_ist * 60 + minute_ist - 5 * 60 - 30
+                if total_minutes_utc < 0:
+                    total_minutes_utc += 24 * 60
+                hour_utc   = (total_minutes_utc // 60) % 24
+                minute_utc = total_minutes_utc % 60
+                logger.info(
+                    f"[SCHEDULER] LinkedIn schedule from DB: {hour_ist:02d}:{minute_ist:02d} IST "
+                    f"→ {hour_utc:02d}:{minute_utc:02d} UTC"
+                )
+                return hour_utc, minute_utc
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning(f"[SCHEDULER] Could not read LinkedinSearchConfig schedule: {exc}")
+
+    # Fallback to env vars
+    return (
+        int(os.getenv("LINKEDIN_SCHEDULE_HOUR",   "8")),
+        int(os.getenv("LINKEDIN_SCHEDULE_MINUTE",  "30")),
+    )
+
+
 def schedule_jobs():
     global _scheduler
     config    = load_config()
@@ -282,18 +322,18 @@ def schedule_jobs():
     )
     logger.info(f"[SCHEDULER] Website audit job scheduled at {audit_hour:02d}:{audit_minute:02d} daily.")
 
-    # ---- LinkedIn Enrichment Batch Job (Must run before Lead Scoring) ----
-    linkedin_hour   = int(os.getenv("LINKEDIN_SCHEDULE_HOUR",   "2"))
-    linkedin_minute = int(os.getenv("LINKEDIN_SCHEDULE_MINUTE", "0"))
+    # ---- LinkedIn Search + Connect Job (driven by LinkedinSearchConfig) ----
+    # Schedule time is read from the DB config row; falls back to env vars if not set.
+    _linkedin_search_hour, _linkedin_search_minute = _get_linkedin_search_schedule()
     _scheduler.add_job(
-        make_tracked_job(scheduled_linkedin_batch, job_id="daily_linkedin_search", job_name="LinkedIn Enrichment Batch", max_retries=1, retry_delay_sec=linkedin_retry_delay),
+        make_tracked_job(scheduled_linkedin_batch, job_id="daily_linkedin_search", job_name="LinkedIn Search + Connect", max_retries=1, retry_delay_sec=linkedin_retry_delay),
         "cron",
-        hour=linkedin_hour,
-        minute=linkedin_minute,
+        hour=_linkedin_search_hour,
+        minute=_linkedin_search_minute,
         id="daily_linkedin_search",
         replace_existing=True,
     )
-    logger.info(f"[SCHEDULER] LinkedIn batch job scheduled at {linkedin_hour:02d}:{linkedin_minute:02d} daily.")
+    logger.info(f"[SCHEDULER] LinkedIn search+connect job scheduled at {_linkedin_search_hour:02d}:{_linkedin_search_minute:02d} daily.")
 
     # ---- Lead Scoring + Pitch Job (Runs after Audit and LinkedIn Search) ----
     score_hour   = int(os.getenv("LEAD_SCORE_SCHEDULE_HOUR",   "3"))
@@ -308,19 +348,18 @@ def schedule_jobs():
     )
     logger.info(f"[SCHEDULER] Lead scoring job scheduled at {score_hour:02d}:{score_minute:02d} daily.")
 
-    # ---- LinkedIn Connections Batch Job ----
-    connections_hour   = int(os.getenv("LINKEDIN_CONNECTIONS_SCHEDULE_HOUR",   "4"))
-    connections_minute = int(os.getenv("LINKEDIN_CONNECTIONS_SCHEDULE_MINUTE", "0"))
-    _scheduler.add_job(
-        make_tracked_job(scheduled_linkedin_connections, job_id="daily_linkedin_connections", job_name="LinkedIn Connections", max_retries=1, retry_delay_sec=linkedin_retry_delay),
-        "cron",
-        hour=connections_hour,
-        minute=connections_minute,
-        id="daily_linkedin_connections",
-        replace_existing=True,
-    )
-    
-    logger.info(f"[SCHEDULER] LinkedIn connections job scheduled at {connections_hour:02d}:{connections_minute:02d} daily.")
+    # ---- LinkedIn Connections Batch Job (DISABLED — connections now sent inline during search) ----
+    # connections_hour   = int(os.getenv("LINKEDIN_CONNECTIONS_SCHEDULE_HOUR",   "4"))
+    # connections_minute = int(os.getenv("LINKEDIN_CONNECTIONS_SCHEDULE_MINUTE", "0"))
+    # _scheduler.add_job(
+    #     make_tracked_job(scheduled_linkedin_connections, job_id="daily_linkedin_connections", job_name="LinkedIn Connections", max_retries=1, retry_delay_sec=linkedin_retry_delay),
+    #     "cron",
+    #     hour=connections_hour,
+    #     minute=connections_minute,
+    #     id="daily_linkedin_connections",
+    #     replace_existing=True,
+    # )
+    # logger.info(f"[SCHEDULER] LinkedIn connections job scheduled at {connections_hour:02d}:{connections_minute:02d} daily.")
 
     # ---- LinkedIn Acceptance Check Job (runs every 2 hours) ----
     acceptance_interval_hours = int(os.getenv("LINKEDIN_ACCEPTANCE_INTERVAL_HOURS", "2"))

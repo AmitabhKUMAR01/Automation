@@ -13,8 +13,10 @@ from app.scraper.linkedin_finder import (
     BETWEEN_COMPANIES_DELAY,
 )
 from app.scraper.linkedin_connector import send_connection_requests, send_daily_global_connections, check_recent_connections
+from app.scraper.linkedin_search_connector import run_linkedin_search_and_send_connections
 from app.models.linkedin_contact import LinkedinContact
 from app.models.business_client import Business_Client
+from app.models.linkedin_search_config import LinkedinSearchConfig
 
 MAX_CONCURRENT_PROFILES = int(os.getenv("MAX_CONCURRENT_PROFILES", "1"))
 _linkedin_semaphore = threading.BoundedSemaphore(MAX_CONCURRENT_PROFILES)
@@ -240,6 +242,80 @@ def run_linkedin_acceptance_check(profile_id: int = 1) -> None:
             )
     except Exception as exc:
         logger.info(f"[LINKEDIN ACCEPTANCE] Unexpected error: {exc}")
+    finally:
+        db.close()
+        _linkedin_semaphore.release()
+        profile_lock.release()
+
+
+## Scheduled batch: Search LinkedIn by position+location and send connections inline
+def run_linkedin_search_and_connect(profile_id: int = 1) -> None:
+    """
+    Scheduled daily job (called by APScheduler via _run_job_for_profiles).
+
+    Flow:
+      1. Load the active LinkedinSearchConfig (positions list + location).
+      2. For each position — search LinkedIn, click Show all, send up to 19 connections.
+      3. Navigate to My Network > People you may know > Show all — send up to 20 connections.
+      4. Persist every sent connection to linkedin_search_contacts table.
+    """
+    profile_lock = get_profile_lock(profile_id)
+    if not profile_lock.acquire(blocking=False):
+        logger.info(f"[LINKEDIN SEARCH JOB] Profile {profile_id} is busy — skipped.")
+        return
+
+    if not _linkedin_semaphore.acquire(blocking=False):
+        logger.info("[LINKEDIN SEARCH JOB] Max concurrent sessions — skipped.")
+        profile_lock.release()
+        return
+
+    db = SessionLocal()
+    try:
+        # Load the active search config
+        config = (
+            db.query(LinkedinSearchConfig)
+            .filter(LinkedinSearchConfig.is_active == True)  # noqa: E712
+            .first()
+        )
+
+        if not config:
+            logger.info("[LINKEDIN SEARCH JOB] No active LinkedinSearchConfig found — skipping.")
+            return
+
+        positions = config.positions or []
+        location  = config.location  or "Bahrain"
+
+        if not positions:
+            logger.info("[LINKEDIN SEARCH JOB] No positions configured — skipping.")
+            return
+
+        logger.info(
+            f"[LINKEDIN SEARCH JOB] 🚀 Starting for Profile {profile_id} | "
+            f"Positions: {positions} | Location: {location}"
+        )
+
+        result = run_linkedin_search_and_send_connections(
+            positions  = positions,
+            location   = location,
+            profile_id = profile_id,
+            db         = db,
+        )
+
+        logger.info(
+            f"[LINKEDIN SEARCH JOB] ✅ Done — "
+            f"search_sent={result['search_connections_sent']}, "
+            f"network_sent={result['network_connections_sent']}, "
+            f"session_expired={result['session_expired']}"
+        )
+
+        if result.get("session_expired"):
+            logger.warning(
+                "[LINKEDIN SEARCH JOB] ⚠️  Session expired. "
+                "Re-run save_state.py to refresh the session."
+            )
+
+    except Exception as exc:
+        logger.error(f"[LINKEDIN SEARCH JOB] Unexpected error: {exc}")
     finally:
         db.close()
         _linkedin_semaphore.release()

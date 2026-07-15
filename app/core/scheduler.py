@@ -245,6 +245,7 @@ def schedule_jobs():
 
     for time_str in times:
         hour, minute = time_str.split(":")
+        # ---- Google Maps Scraper Job ----
         _scheduler.add_job(
             make_tracked_job(run_next_job, job_id=f"scraper_{hour}_{minute}", job_name="Lead Scraper", max_retries=3, retry_delay_sec=default_retry_delay),
             "cron", hour=int(hour), minute=int(minute), id=f"scraper_{hour}_{minute}",

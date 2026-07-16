@@ -8,9 +8,11 @@ from sqlalchemy.orm import Session
 from app.config.database import SessionLocal
 from app.models.sales_pitch import SalesPitch
 from app.models.linkedin_contact import LinkedinContact
+from app.models.linkedin_search_contact import LinkedinSearchContact
 import app.models.lead_score        # noqa: F401  — registers lead_scores table
 import app.models.business_client   # noqa: F401  — registers business_clients table
 import app.models.linkedin_contact  # noqa: F401  — registers linkedin_contacts table
+import app.models.linkedin_search_contact  # noqa: F401  — registers linkedin_search_contacts table
 from app.scraper.linkedin_reply_checker import check_reply_for_contact
 from app.scraper.linkedin_finder import LinkedInSessionExpiredError
 from app.services.notification_service import notify_reply_received
@@ -87,18 +89,25 @@ def check_pitch_replies(db: Session, profile_id: int = 1) -> dict:
         summary["checked"] += 1
 
         # ── Resolve the linked contact ─────────────────────────────────────────
-        if not pitch.linkedin_contact_id:
-            logger.info(f"[REPLY CHECK] ⏭️  Pitch {pitch.id} has no linkedin_contact_id — skipping.")
+        if not pitch.linkedin_contact_id and not pitch.linkedin_search_contact_id:
+            logger.info(f"[REPLY CHECK] ⏭️  Pitch {pitch.id} has no linked contact — skipping.")
             summary["skipped"] += 1
             _mark_checked_no_reply(pitch, db)
             continue
 
-        contact: LinkedinContact | None = db.query(LinkedinContact).filter(
-            LinkedinContact.id == pitch.linkedin_contact_id
-        ).first()
+        if pitch.linkedin_search_contact_id:
+            contact = db.query(LinkedinSearchContact).filter(
+                LinkedinSearchContact.id == pitch.linkedin_search_contact_id
+            ).first()
+            contact_type = "LinkedinSearchContact"
+        else:
+            contact = db.query(LinkedinContact).filter(
+                LinkedinContact.id == pitch.linkedin_contact_id
+            ).first()
+            contact_type = "LinkedinContact"
 
         if not contact or not contact.profile_url:
-            logger.info(f"[REPLY CHECK] ⏭️  Pitch {pitch.id} — contact not found or no profile_url.")
+            logger.info(f"[REPLY CHECK] ⏭️  Pitch {pitch.id} — {contact_type} not found or no profile_url.")
             summary["skipped"] += 1
             _mark_checked_no_reply(pitch, db)
             continue
@@ -120,13 +129,15 @@ def check_pitch_replies(db: Session, profile_id: int = 1) -> dict:
                     f"[REPLY CHECK] 🎉 Reply recorded for pitch {pitch.id} "
                     f"({contact.name}): {(result['reply_text'] or '')[:60]!r}"
                 )
-                # Look up company name for a richer notification
-                client = db.query(Business_Client).filter(
-                    Business_Client.id == pitch.business_client_id
-                ).first()
+                company_name = ""
+                if pitch.business_client_id:
+                    client = db.query(Business_Client).filter(
+                        Business_Client.id == pitch.business_client_id
+                    ).first()
+                    company_name = client.name if client else ""
                 notify_reply_received(
                     contact_name  = contact.name or "Unknown",
-                    company_name  = client.name if client else "",
+                    company_name  = company_name,
                     reply_snippet = result["reply_text"] or "",
                 )
             else:

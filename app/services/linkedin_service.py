@@ -15,6 +15,7 @@ from app.scraper.linkedin_finder import (
 from app.scraper.linkedin_connector import send_connection_requests, send_daily_global_connections, check_recent_connections
 from app.scraper.linkedin_search_connector import run_linkedin_search_and_send_connections
 from app.models.linkedin_contact import LinkedinContact
+from app.models.linkedin_search_contact import LinkedinSearchContact
 from app.models.business_client import Business_Client
 from app.models.linkedin_search_config import LinkedinSearchConfig
 
@@ -229,12 +230,26 @@ def run_linkedin_acceptance_check(profile_id: int = 1) -> None:
                 .first()
             )
             company_name = ""
-            profile_url  = contact_record.profile_url if contact_record else ""
+            profile_url  = ""
             if contact_record:
+                profile_url  = contact_record.profile_url or ""
                 client = db.query(Business_Client).filter(
                     Business_Client.id == contact_record.business_client_id
                 ).first()
                 company_name = client.name if client else ""
+            else:
+                # Try search contacts
+                search_record = (
+                    db.query(LinkedinSearchContact)
+                    .filter(LinkedinSearchContact.name == name, LinkedinSearchContact.is_connected == True)  # noqa: E712
+                    .order_by(LinkedinSearchContact.connected_at.desc())
+                    .first()
+                )
+                if search_record:
+                    profile_url = search_record.profile_url or ""
+                    # Position or Location could be company name fallback, or empty
+                    company_name = search_record.location or ""
+
             notify_connection_accepted(
                 contact_name = name,
                 profile_url  = profile_url,

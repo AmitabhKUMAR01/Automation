@@ -9,6 +9,7 @@ from app.config.database import SessionLocal
 from app.models.sales_pitch import SalesPitch
 from app.models.business_client import Business_Client
 from app.models.linkedin_contact import LinkedinContact
+from app.models.linkedin_search_contact import LinkedinSearchContact
 from app.services.email_sender import send_pitch_email
 from app.scraper.linkedin_dm_sender import send_linkedin_dm
 from app.scraper.linkedin_finder import LinkedInSessionExpiredError
@@ -141,17 +142,24 @@ def deliver_pending_pitches(db: Session, profile_id: int = 1) -> dict:
                 )
                 break   # stop processing LinkedIn pitches for today
 
-            if not pitch.linkedin_contact_id:
-                _mark_skipped(pitch, db, "No linkedin_contact_id linked to pitch")
+            if not pitch.linkedin_contact_id and not pitch.linkedin_search_contact_id:
+                _mark_skipped(pitch, db, "No contact (regular or search) linked to pitch")
                 summary["skipped"] += 1
                 continue
 
-            contact = db.query(LinkedinContact).filter(
-                LinkedinContact.id == pitch.linkedin_contact_id
-            ).first()
+            if pitch.linkedin_search_contact_id:
+                contact = db.query(LinkedinSearchContact).filter(
+                    LinkedinSearchContact.id == pitch.linkedin_search_contact_id
+                ).first()
+                contact_type = "LinkedinSearchContact"
+            else:
+                contact = db.query(LinkedinContact).filter(
+                    LinkedinContact.id == pitch.linkedin_contact_id
+                ).first()
+                contact_type = "LinkedinContact"
 
             if not contact:
-                _mark_skipped(pitch, db, "LinkedinContact record not found")
+                _mark_skipped(pitch, db, f"{contact_type} record not found")
                 summary["skipped"] += 1
                 continue
 

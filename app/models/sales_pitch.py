@@ -14,10 +14,12 @@ class SalesPitch(Base):
         index=True,
         default=lambda: str(uuid.uuid4()),
     )
-    business_client_id  = Column(Integer, ForeignKey("business_clients.id"),  nullable=False, index=True)
-    lead_score_id       = Column(Integer, ForeignKey("lead_scores.id"),       nullable=False, index=True)
+    business_client_id  = Column(Integer, ForeignKey("business_clients.id"),  nullable=True, index=True)
+    lead_score_id       = Column(Integer, ForeignKey("lead_scores.id"),       nullable=True, index=True)
     # NULL for email / generic pitches; set when pitch is for a specific LinkedIn contact
     linkedin_contact_id = Column(Integer, ForeignKey("linkedin_contacts.id"), nullable=True,  index=True)
+    # NULL for client pitches; set when pitch is for a specific LinkedIn search-based contact
+    linkedin_search_contact_id = Column(Integer, ForeignKey("linkedin_search_contacts.id"), nullable=True, index=True)
 
     # ---------- Pitch Content ----------
     pitch_subject  = Column(Text, nullable=True)

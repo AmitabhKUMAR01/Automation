@@ -6,6 +6,12 @@ from datetime import datetime, timezone
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 from sqlalchemy.orm import Session
 from app.models.linkedin_contact import LinkedinContact
+from app.models.linkedin_search_contact import LinkedinSearchContact
+from app.models.sales_pitch import SalesPitch
+import app.models.lead_score
+import app.models.business_client
+from app.services.sales_pitch_service import generate_sales_pitch
+import uuid
 from app.scraper.linkedin_finder import (
     HEADLESS,
     LinkedInSessionExpiredError,
@@ -414,7 +420,7 @@ def check_recent_connections(db: Session, max_scroll: int = 3, profile_id: int =
                 return result
 
             # Load all contacts that we sent but haven't yet marked as connected
-            pending = (
+            pending_contacts = (
                 db.query(LinkedinContact)
                 .filter(
                     LinkedinContact.connection_sent == True,   # noqa: E712
@@ -423,13 +429,25 @@ def check_recent_connections(db: Session, max_scroll: int = 3, profile_id: int =
                 .all()
             )
 
-            result["checked"] = len(pending)
-            logger.info(f"[ACCEPTANCE CHECK] Checking {len(pending)} pending contact(s) for acceptance…")
+            pending_search = (
+                db.query(LinkedinSearchContact)
+                .filter(
+                    LinkedinSearchContact.connection_sent == True,   # noqa: E712
+                    LinkedinSearchContact.is_connected   == False,  # noqa: E712
+                )
+                .all()
+            )
 
-            for contact in pending:
+            result["checked"] = len(pending_contacts) + len(pending_search)
+            logger.info(
+                f"[ACCEPTANCE CHECK] Checking {len(pending_contacts)} standard & "
+                f"{len(pending_search)} search contact(s) for acceptance…"
+            )
+
+            # 1. Process regular contacts
+            for contact in pending_contacts:
                 if not contact.profile_url:
                     continue
-                # Extract slug from stored URL for comparison
                 if "/in/" not in contact.profile_url:
                     continue
                 contact_slug = contact.profile_url.split("/in/")[1].split("?")[0].rstrip("/").lower()
@@ -441,6 +459,53 @@ def check_recent_connections(db: Session, max_scroll: int = 3, profile_id: int =
                     result["newly_accepted"] += 1
                     result["names"].append(contact.name)
                     logger.info(f"[ACCEPTANCE CHECK] 🎉 {contact.name} accepted your connection!")
+
+            # 2. Process search contacts
+            for contact in pending_search:
+                if not contact.profile_url:
+                    continue
+                if "/in/" not in contact.profile_url:
+                    continue
+                contact_slug = contact.profile_url.split("/in/")[1].split("?")[0].rstrip("/").lower()
+
+                if contact_slug in accepted_slugs:
+                    contact.is_connected = True
+                    contact.connected_at  = datetime.now(timezone.utc)
+                    db.commit()
+
+                    # Automatically generate generic SalesPitch
+                    already_pitched = db.query(SalesPitch).filter(
+                        SalesPitch.linkedin_search_contact_id == contact.id
+                    ).first()
+
+                    if not already_pitched:
+                        pitch_data = generate_sales_pitch(
+                            client=None,
+                            audit=None,
+                            score_data=None,
+                            linkedin_contact=None,
+                        )
+                        db.add(SalesPitch(
+                            uuid=str(uuid.uuid4()),
+                            business_client_id=None,
+                            lead_score_id=None,
+                            linkedin_contact_id=None,
+                            linkedin_search_contact_id=contact.id,
+                            pitch_subject=pitch_data.get("pitch_subject"),
+                            pitch_hook=pitch_data.get("pitch_hook"),
+                            pitch_body=pitch_data.get("pitch_body"),
+                            key_pain_points=pitch_data.get("key_pain_points"),
+                            generated_by=pitch_data.get("generated_by"),
+                            pitch_channel="linkedin",
+                            generated_at=datetime.now(timezone.utc),
+                            delivery_status="pending",
+                        ))
+                        db.commit()
+                        logger.info(f"[ACCEPTANCE CHECK] 💬 Generated generic pitch for search contact {contact.name}")
+
+                    result["newly_accepted"] += 1
+                    result["names"].append(contact.name)
+                    logger.info(f"[ACCEPTANCE CHECK] 🎉 Search contact {contact.name} accepted your connection!")
 
             if result["newly_accepted"] == 0:
                 logger.info("[ACCEPTANCE CHECK] No new acceptances detected.")

@@ -4,6 +4,7 @@ import time
 import random
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout, Locator
 from app.models.linkedin_contact import LinkedinContact
+from app.models.linkedin_search_contact import LinkedinSearchContact
 from app.scraper.linkedin_finder import (
     HEADLESS,
     LinkedInSessionExpiredError,
@@ -210,7 +211,7 @@ def _fill_recipient(page, name: str, job_title: str = "") -> bool:
     return False
 
 
-def send_linkedin_dm(contact: LinkedinContact, message: str, db: Session, profile_id: int = 1) -> bool:
+def send_linkedin_dm(contact: LinkedinContact | LinkedinSearchContact, message: str, db: Session, profile_id: int = 1) -> bool:
     """
     Send a LinkedIn DM to a 1st-degree connection.
 
@@ -330,7 +331,8 @@ def send_linkedin_dm(contact: LinkedinContact, message: str, db: Session, profil
                 message_btn.click(force=True)
                 _rand_delay(2.5, 3.5)
 
-                if not _fill_recipient(page, contact.name, job_title=contact.job_title or ""):
+                job_title = getattr(contact, "job_title", getattr(contact, "position", "")) or ""
+                if not _fill_recipient(page, contact.name, job_title=job_title):
                     logger.info(f"[DM SENDER] ⚠️  Could not fill recipient for {contact.name} — aborting.")
                     return False
 

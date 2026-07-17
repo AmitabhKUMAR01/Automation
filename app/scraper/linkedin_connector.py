@@ -484,6 +484,7 @@ def check_recent_connections(db: Session, max_scroll: int = 3, profile_id: int =
                             audit=None,
                             score_data=None,
                             linkedin_contact=None,
+                            profile_id=profile_id,
                         )
                         db.add(SalesPitch(
                             uuid=str(uuid.uuid4()),

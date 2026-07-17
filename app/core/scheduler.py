@@ -385,18 +385,16 @@ def schedule_jobs():
     )
     logger.info(f"[SCHEDULER] Pitch delivery job scheduled at {delivery_hour:02d}:{delivery_minute:02d} daily.")
 
-    # ---- LinkedIn Reply Check Job (Runs after pitch delivery to check for responses) ----
-    reply_hour   = int(os.getenv("PITCH_REPLY_CHECK_HOUR",   "16"))
-    reply_minute = int(os.getenv("PITCH_REPLY_CHECK_MINUTE", "0"))
+    # ---- LinkedIn Reply Check Job (Hybrid: inbox scan + targeted thread check) ----
+    reply_interval_hours = int(os.getenv("REPLY_CHECK_INTERVAL_HOURS", "4"))
     _scheduler.add_job(
-        make_tracked_job(scheduled_pitch_reply_check, job_id="daily_pitch_reply_check", job_name="Pitch Reply Check", max_retries=1, retry_delay_sec=linkedin_retry_delay),
-        "cron",
-        hour=reply_hour,
-        minute=reply_minute,
-        id="daily_pitch_reply_check",
+        make_tracked_job(scheduled_pitch_reply_check, job_id="periodic_pitch_reply_check", job_name="Pitch Reply Check", max_retries=1, retry_delay_sec=linkedin_retry_delay),
+        "interval",
+        hours=reply_interval_hours,
+        id="periodic_pitch_reply_check",
         replace_existing=True,
     )
-    logger.info(f"[SCHEDULER] Pitch reply check job scheduled at {reply_hour:02d}:{reply_minute:02d} daily.")
+    logger.info(f"[SCHEDULER] Pitch reply check job scheduled every {reply_interval_hours} hour(s).")
 
     _scheduler.start()
     return _scheduler

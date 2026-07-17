@@ -14,6 +14,7 @@ import app.models.business_client   # noqa: F401  — registers business_clients
 import app.models.linkedin_contact  # noqa: F401  — registers linkedin_contacts table
 import app.models.linkedin_search_contact  # noqa: F401  — registers linkedin_search_contacts table
 from app.scraper.linkedin_reply_checker import check_reply_for_contact
+from app.scraper.linkedin_inbox_scanner import scan_inbox
 from app.scraper.linkedin_finder import LinkedInSessionExpiredError
 from app.services.notification_service import notify_reply_received
 from app.models.business_client import Business_Client
@@ -21,11 +22,13 @@ from app.models.business_client import Business_Client
 def _cfg() -> dict:
     return {
         # Only re-check pitches whose reply_checked_at is older than this many hours
-        "recheck_hours"    : int(os.getenv("REPLY_RECHECK_HOURS",      "12")),
+        "recheck_hours"    : int(os.getenv("REPLY_RECHECK_HOURS",      "4")),
         # Maximum pitches to check per run (avoid long Playwright sessions)
         "max_per_run"      : int(os.getenv("REPLY_MAX_PER_RUN",        "20")),
         # Delay between each contact check (seconds) — reduces LinkedIn bot risk
         "delay_between"    : float(os.getenv("REPLY_CHECK_DELAY_SEC",  "10.0")),
+        # Maximum scrolls on the inbox page
+        "inbox_max_scroll" : int(os.getenv("INBOX_MAX_SCROLL",         "3")),
     }
 
 
@@ -65,54 +68,143 @@ def _fetch_checkable_pitches(db: Session, recheck_hours: int, max_per_run: int) 
     )
 
 
-# ── Core logic ─────────────────────────────────────────────────────────────────
+# ── Contact resolution helper ─────────────────────────────────────────────────
 
-def check_pitch_replies(db: Session, profile_id: int = 1) -> dict:
-    cfg = _cfg()
-    summary = {
-        "checked"      : 0,
-        "replied"      : 0,
-        "no_reply"     : 0,
-        "skipped"      : 0,
-        "session_error": False,
-    }
+def _resolve_contact(pitch: SalesPitch, db: Session) -> tuple:
+    """
+    Resolve the linked contact for a pitch.
+    Returns (contact, contact_type) or (None, None) if not found.
+    """
+    if pitch.linkedin_search_contact_id:
+        contact = db.query(LinkedinSearchContact).filter(
+            LinkedinSearchContact.id == pitch.linkedin_search_contact_id
+        ).first()
+        return contact, "LinkedinSearchContact"
+    elif pitch.linkedin_contact_id:
+        contact = db.query(LinkedinContact).filter(
+            LinkedinContact.id == pitch.linkedin_contact_id
+        ).first()
+        return contact, "LinkedinContact"
+    return None, None
 
-    pitches = _fetch_checkable_pitches(db, cfg["recheck_hours"], cfg["max_per_run"])
 
-    if not pitches:
-        logger.info("[REPLY CHECK] ℹ️   No pitches eligible for reply check.")
-        return summary
+def _extract_slug_from_url(profile_url: str) -> str | None:
+    """Extract the /in/<slug> part from a profile URL, lowercased."""
+    if not profile_url:
+        return None
+    import re
+    match = re.search(r"/in/([^/?#]+)", profile_url)
+    if match:
+        return match.group(1).lower().rstrip("/")
+    return None
 
-    logger.info(f"[REPLY CHECK] 🔍 Starting reply check — {len(pitches)} pitch(es) to process.")
+
+# ── Phase 1: Inbox Scan ───────────────────────────────────────────────────────
+
+def _run_inbox_scan_phase(
+    db: Session,
+    pitches: list[SalesPitch],
+    profile_id: int,
+    cfg: dict,
+) -> list[SalesPitch] | None:
+    """
+    Phase 1: Scan the LinkedIn inbox for unread conversations and
+    cross-reference against the given pitches.
+
+    Returns a shortlist of pitches that likely have replies,
+    or None if the inbox scan failed (caller should fall back).
+    """
+    logger.info("[REPLY CHECK] 📬 Phase 1: Scanning LinkedIn inbox for unread conversations…")
+
+    try:
+        inbox_result = scan_inbox(
+            db=db,
+            profile_id=profile_id,
+            max_scroll=cfg["inbox_max_scroll"],
+        )
+    except LinkedInSessionExpiredError:
+        raise  # let it propagate to stop the entire job
+    except Exception as exc:
+        logger.info(f"[REPLY CHECK] ⚠️  Inbox scan failed: {exc} — falling back to per-contact check.")
+        return None
+
+    if not inbox_result["success"]:
+        logger.info(f"[REPLY CHECK] ⚠️  Inbox scan unsuccessful: {inbox_result.get('error')} — falling back.")
+        return None
+
+    unread = inbox_result["unread_conversations"]
+    if not unread:
+        logger.info("[REPLY CHECK] ℹ️  Phase 1: No unread conversations found — no replies to check.")
+        # Mark all pitches as checked (no reply) to update their timestamps
+        for pitch in pitches:
+            _mark_checked_no_reply(pitch, db)
+        return []  # empty shortlist — nothing to deep-check
+
+    # Build lookup sets from unread conversations
+    unread_slugs = {c["profile_slug"] for c in unread if c.get("profile_slug")}
+    unread_names = {c["name"].strip().lower() for c in unread if c.get("name")}
+
+    logger.info(
+        f"[REPLY CHECK] 📊 Phase 1 results: {len(unread)} unread conversation(s) | "
+        f"slugs={unread_slugs} | names={unread_names}"
+    )
+
+    # Cross-reference: find pitches whose contact matches an unread conversation
+    shortlist: list[SalesPitch] = []
+    for pitch in pitches:
+        contact, _ = _resolve_contact(pitch, db)
+        if not contact:
+            continue
+
+        matched = False
+        # Match by profile slug
+        contact_slug = _extract_slug_from_url(getattr(contact, "profile_url", None))
+        if contact_slug and contact_slug in unread_slugs:
+            matched = True
+
+        # Match by name (fallback)
+        if not matched and hasattr(contact, "name") and contact.name:
+            contact_name_lower = contact.name.strip().lower()
+            if contact_name_lower in unread_names:
+                matched = True
+
+        if matched:
+            shortlist.append(pitch)
+            logger.info(f"[REPLY CHECK] 🎯 Phase 1 match: pitch {pitch.id} ({contact.name})")
+        else:
+            # This pitch's contact did NOT appear in unread — mark checked, no reply
+            _mark_checked_no_reply(pitch, db)
+
+    logger.info(f"[REPLY CHECK] 📋 Phase 1 shortlist: {len(shortlist)} pitch(es) to deep-check.")
+    return shortlist
+
+
+# ── Phase 2: Targeted Thread Check ────────────────────────────────────────────
+
+def _run_thread_check_phase(
+    db: Session,
+    pitches: list[SalesPitch],
+    profile_id: int,
+    cfg: dict,
+    summary: dict,
+) -> None:
+    """
+    Phase 2: Open individual conversation threads for the shortlisted
+    pitches and extract reply text using the existing reply checker.
+    """
+    logger.info(f"[REPLY CHECK] 🔍 Phase 2: Deep-checking {len(pitches)} thread(s)…")
 
     for pitch in pitches:
         summary["checked"] += 1
 
-        # ── Resolve the linked contact ─────────────────────────────────────────
-        if not pitch.linkedin_contact_id and not pitch.linkedin_search_contact_id:
-            logger.info(f"[REPLY CHECK] ⏭️  Pitch {pitch.id} has no linked contact — skipping.")
-            summary["skipped"] += 1
-            _mark_checked_no_reply(pitch, db)
-            continue
-
-        if pitch.linkedin_search_contact_id:
-            contact = db.query(LinkedinSearchContact).filter(
-                LinkedinSearchContact.id == pitch.linkedin_search_contact_id
-            ).first()
-            contact_type = "LinkedinSearchContact"
-        else:
-            contact = db.query(LinkedinContact).filter(
-                LinkedinContact.id == pitch.linkedin_contact_id
-            ).first()
-            contact_type = "LinkedinContact"
-
-        if not contact or not contact.profile_url:
+        contact, contact_type = _resolve_contact(pitch, db)
+        if not contact or not getattr(contact, "profile_url", None):
             logger.info(f"[REPLY CHECK] ⏭️  Pitch {pitch.id} — {contact_type} not found or no profile_url.")
             summary["skipped"] += 1
             _mark_checked_no_reply(pitch, db)
             continue
 
-        # ── Call the Playwright scraper ────────────────────────────────────────
+        # ── Call the Playwright scraper ────────────────────────────────────
         try:
             result = check_reply_for_contact(
                 profile_url  = contact.profile_url,
@@ -161,8 +253,68 @@ def check_pitch_replies(db: Session, profile_id: int = 1) -> dict:
         # Polite delay between Playwright sessions
         time.sleep(cfg["delay_between"])
 
+
+# ── Core logic ─────────────────────────────────────────────────────────────────
+
+def check_pitch_replies(db: Session, profile_id: int = 1) -> dict:
+    """
+    Hybrid two-phase reply checker:
+      Phase 1 — Scan inbox for unread conversations (1 page load).
+      Phase 2 — Only open threads for contacts with new messages.
+      Fallback — If inbox scan fails, use per-contact approach.
+    """
+    cfg = _cfg()
+    summary = {
+        "checked"      : 0,
+        "replied"      : 0,
+        "no_reply"     : 0,
+        "skipped"      : 0,
+        "session_error": False,
+        "phase"        : "none",
+    }
+
+    pitches = _fetch_checkable_pitches(db, cfg["recheck_hours"], cfg["max_per_run"])
+
+    if not pitches:
+        logger.info("[REPLY CHECK] ℹ️   No pitches eligible for reply check.")
+        return summary
+
+    logger.info(f"[REPLY CHECK] 🔍 Starting hybrid reply check — {len(pitches)} pitch(es) eligible.")
+
+    # ── Phase 1: Inbox scan ────────────────────────────────────────────────────
+    try:
+        shortlist = _run_inbox_scan_phase(db, pitches, profile_id, cfg)
+    except LinkedInSessionExpiredError:
+        summary["session_error"] = True
+        logger.info(
+            "[REPLY CHECK] ⛔ LinkedIn session expired during inbox scan.\n"
+            "  Re-authenticate: python app/scraper/linkdin/save_state.py"
+        )
+        return summary
+
+    if shortlist is not None:
+        # Phase 1 succeeded
+        summary["phase"] = "hybrid"
+        if not shortlist:
+            # No unread conversations matched — nothing to deep-check
+            summary["no_reply"] = len(pitches)
+            logger.info("[REPLY CHECK] ✅ Phase 1 found no unread matches — all pitches marked checked.")
+        else:
+            # Phase 2: deep-check only the shortlisted pitches
+            _run_thread_check_phase(db, shortlist, profile_id, cfg, summary)
+            # Mark remaining pitches (not in shortlist) as checked
+            shortlist_ids = {p.id for p in shortlist}
+            for pitch in pitches:
+                if pitch.id not in shortlist_ids and not pitch.reply_checked_at:
+                    _mark_checked_no_reply(pitch, db)
+    else:
+        # Phase 1 failed — fall back to per-contact check for all pitches
+        summary["phase"] = "fallback"
+        logger.info("[REPLY CHECK] 🔄 Falling back to per-contact reply check (Phase 1 failed).")
+        _run_thread_check_phase(db, pitches, profile_id, cfg, summary)
+
     logger.info(
-        f"[REPLY CHECK] ✅ Done — "
+        f"[REPLY CHECK] ✅ Done (phase={summary['phase']}) — "
         f"checked: {summary['checked']} | "
         f"replied: {summary['replied']} | "
         f"no_reply: {summary['no_reply']} | "

@@ -67,6 +67,7 @@ def _rule_based_pitch(
     client: Optional[Business_Client],
     score_data: dict,
     contact_email: str | None = None,
+    sender_name: str = "Team",
 ) -> dict:
     name       = client.name     if client else "there"
     category   = client.category if client else "your business"
@@ -107,7 +108,7 @@ def _rule_based_pitch(
         f"{hook}\n\n{pain_block}\n\n{urgency}\n\n"
         f"We specialise in fast, measurable website improvements for businesses "
         f"like yours in {city}. No long contracts — just results.\n\n"
-        "Would you be open to a 15-minute call this week?\n\nBest,\n[Your Name]"
+        f"Would you be open to a 15-minute call this week?\n\nBest,\n{sender_name}"
     )
     return {
         "pitch_subject":  subject,
@@ -254,6 +255,7 @@ def generate_sales_pitch(
     score_data: dict,
     linkedin_contact: Optional[LinkedinContact] = None,
     contact_email: str | None = None,
+    profile_id: Optional[int] = None,
 ) -> dict:
     """
     Generate a sales pitch for a lead.
@@ -267,6 +269,24 @@ def generate_sales_pitch(
       - A valid API key exists for the selected provider, AND
       - The lead grade is at or below PITCH_LLM_MIN_GRADE (default: C)
     """
+    from app.config.database import SessionLocal
+    from app.models.profile_setting import ProfileSetting
+
+    # Fetch sender name dynamically from the database using profile_id or the first active profile
+    sender_name = "Team"
+    db = SessionLocal()
+    try:
+        if profile_id:
+            profile = db.query(ProfileSetting).filter(ProfileSetting.id == profile_id).first()
+        else:
+            profile = db.query(ProfileSetting).filter(ProfileSetting.is_active == True).first()
+        if profile and profile.name:
+            sender_name = profile.name
+    except Exception as e:
+        logger.warning(f"[PITCH] Failed to query ProfileSetting name: {e}")
+    finally:
+        db.close()
+
     if not client or client.scrape_source != "google_maps":
         greeting = "Hi,"
         if linkedin_contact and linkedin_contact.name:
@@ -284,7 +304,9 @@ def generate_sales_pitch(
             "• UI/UX Design\n"
             "• SEO, SMO SEM & Google Ads\n\n"
             "We help businesses build and scale reliable digital products. If you’re planning a project or improving an existing system, we’d be happy to connect.\n\n"
-            "Looking forward to hearing from you."
+            "Looking forward to hearing from you.\n\n"
+            "Best regards,\n"
+            f"{sender_name}"
         )
         return {
             "pitch_subject": "Collaboration / Development Services",
@@ -326,7 +348,7 @@ def generate_sales_pitch(
         )
         if channel == "linkedin":
             return _rule_based_linkedin_pitch(client, linkedin_contact, score_data)
-        return _rule_based_pitch(client, score_data, contact_email)
+        return _rule_based_pitch(client, score_data, contact_email, sender_name=sender_name)
 
     if has_key:
         try:
@@ -341,4 +363,4 @@ def generate_sales_pitch(
 
     if channel == "linkedin":
         return _rule_based_linkedin_pitch(client, linkedin_contact, score_data)
-    return _rule_based_pitch(client, score_data, contact_email)
+    return _rule_based_pitch(client, score_data, contact_email, sender_name=sender_name)

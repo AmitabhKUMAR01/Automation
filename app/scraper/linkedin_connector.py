@@ -20,6 +20,7 @@ from app.scraper.linkedin_finder import (
 )
 import json
 from app.models.profile_setting import ProfileSetting
+from app.scraper.browser_utils import pick_fingerprint, new_stealth_page
 
 
 def send_connection_requests(
@@ -72,18 +73,15 @@ def send_connection_requests(
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
             headless=HEADLESS,
-            slow_mo=800,
             args=["--disable-blink-features=AutomationControlled"],
         )
+        _fp = pick_fingerprint()
         context = browser.new_context(
             storage_state=session_dict,
-            viewport={"width": 1400, "height": 900},
-            user_agent=(
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
+            viewport=_fp["viewport"],
+            user_agent=_fp["user_agent"],
         )
-        page = context.new_page()
+        page = new_stealth_page(context)
 
         try:
             # Verify session first
@@ -196,18 +194,15 @@ def send_daily_global_connections(
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
             headless=HEADLESS,
-            slow_mo=800,
             args=["--disable-blink-features=AutomationControlled"],
         )
+        _fp = pick_fingerprint()
         context = browser.new_context(
             storage_state=session_dict,
-            viewport={"width": 1400, "height": 900},
-            user_agent=(
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
+            viewport=_fp["viewport"],
+            user_agent=_fp["user_agent"],
         )
-        page = context.new_page()
+        page = new_stealth_page(context)
 
         try:
             # Verify session first
@@ -382,15 +377,13 @@ def check_recent_connections(db: Session, max_scroll: int = 3, profile_id: int =
             headless=HEADLESS,
             args=["--disable-blink-features=AutomationControlled"],
         )
+        _fp = pick_fingerprint()
         context = browser.new_context(
             storage_state=session_dict,
-            viewport={"width": 1400, "height": 900},
-            user_agent=(
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
+            viewport=_fp["viewport"],
+            user_agent=_fp["user_agent"],
         )
-        page = context.new_page()
+        page = new_stealth_page(context)
 
         try:
             page.goto(CONNECTIONS_URL, wait_until="domcontentloaded", timeout=60000)

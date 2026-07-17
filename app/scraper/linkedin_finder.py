@@ -15,6 +15,7 @@ from app.models.linkedin_contact import LinkedinContact
 
 import json
 from app.models.profile_setting import ProfileSetting
+from app.scraper.browser_utils import pick_fingerprint, new_stealth_page
 
 HEADLESS = os.getenv("LINKEDIN_HEADLESS", "false").lower() == "true"
 
@@ -175,21 +176,18 @@ def find_linkedin_playwright(company: str, business_client_id: int, db: Session,
         ## launch browser
         browser = pw.chromium.launch(
             headless=HEADLESS,
-            slow_mo=800,
             args=["--disable-blink-features=AutomationControlled"],
         )
 
         ## new context
+        _fp = pick_fingerprint()
         context = browser.new_context(
             storage_state=session_dict,
-            viewport={"width": 1400, "height": 900},
-            user_agent=(
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
+            viewport=_fp["viewport"],
+            user_agent=_fp["user_agent"],
         )
         ## new page
-        page = context.new_page()
+        page = new_stealth_page(context)
 
         try:
             ## Verify session

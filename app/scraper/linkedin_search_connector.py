@@ -41,6 +41,7 @@ from app.scraper.linkedin_finder import (
     _rand_delay,
     _check_session,
 )
+from app.scraper.browser_utils import pick_fingerprint, new_stealth_page
 from app.utils.logger import logger
 
 
@@ -51,8 +52,18 @@ class LinkedInWeeklyLimitError(Exception):
     pass
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-SEARCH_CONNECT_LIMIT  = int(os.getenv("SEARCH_CONNECT_LIMIT",  "19"))
-NETWORK_CONNECT_LIMIT = int(os.getenv("NETWORK_CONNECT_LIMIT", "20"))
+# Hard ceilings enforced in code — env var cannot exceed these
+_SEARCH_CONNECT_HARD_MAX  = 10
+_NETWORK_CONNECT_HARD_MAX = 8
+
+SEARCH_CONNECT_LIMIT = min(
+    int(os.getenv("SEARCH_CONNECT_LIMIT",  "8")),
+    _SEARCH_CONNECT_HARD_MAX,
+)
+NETWORK_CONNECT_LIMIT = min(
+    int(os.getenv("NETWORK_CONNECT_LIMIT", "5")),
+    _NETWORK_CONNECT_HARD_MAX,
+)
 
 # How long to wait (ms) for the first Invite button to appear after navigation
 RESULTS_WAIT_TIMEOUT = 15000
@@ -546,18 +557,15 @@ def run_linkedin_search_and_send_connections(
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
             headless=HEADLESS,
-            slow_mo=600,
             args=["--disable-blink-features=AutomationControlled"],
         )
+        _fp = pick_fingerprint()
         context = browser.new_context(
             storage_state=session_dict,
-            viewport={"width": 1400, "height": 900},
-            user_agent=(
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
+            viewport=_fp["viewport"],
+            user_agent=_fp["user_agent"],
         )
-        page = context.new_page()
+        page = new_stealth_page(context)
 
         try:
             # Warm-up: verify session

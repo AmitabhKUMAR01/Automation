@@ -13,6 +13,9 @@ from app.services.linkedin_service import run_linkedin_batch_job, run_linkedin_d
 from app.services.pitch_delivery_service import run_pitch_delivery_job
 from app.services.pitch_reply_service import run_pitch_reply_check_job
 from datetime import datetime, timezone, timedelta
+import random
+import time
+import pytz
 from app.models.profile_setting import ProfileSetting
 from app.models.scheduler_job_run import SchedulerJobRun
 from app.services.notification_service import notify_job_failure
@@ -23,6 +26,40 @@ TRACKER_FILE = os.path.join(os.path.dirname(__file__), "last_job_tracker.json")
 LOCK_FILE    = os.path.join(os.path.dirname(__file__), "job.lock")  # ADDED: lock file
 _scheduler   = None
 _job_lock    = threading.Lock()                                      # ADDED: thread lock
+_IST         = pytz.timezone("Asia/Kolkata")
+
+
+def _with_jitter(func, max_jitter_minutes: int = 15):
+    """
+    Wrap a scheduled job function with a random startup delay to avoid
+    predictable fixed-cadence timing that LinkedIn's bot detection flags.
+    """
+    def wrapper(*args, **kwargs):
+        delay = random.uniform(0, max_jitter_minutes * 60)
+        logger.info(f"[SCHEDULER] ⏱  Jitter: sleeping {delay:.0f}s before {func.__name__}")
+        time.sleep(delay)
+        return func(*args, **kwargs)
+    wrapper.__name__ = func.__name__
+    return wrapper
+
+
+def _business_hours_gate(func, start_hour_ist: int = 9, end_hour_ist: int = 21):
+    """
+    Skip the job silently if the current IST wall-clock time is outside
+    [start_hour_ist, end_hour_ist). Lets the next interval tick handle it.
+    Prevents overnight runs on interval-triggered jobs.
+    """
+    def wrapper(*args, **kwargs):
+        now_ist = datetime.now(_IST)
+        if not (start_hour_ist <= now_ist.hour < end_hour_ist):
+            logger.info(
+                f"[SCHEDULER] ⏭  {func.__name__} skipped — outside business hours "
+                f"(IST {now_ist.strftime('%H:%M')}; window {start_hour_ist:02d}:00–{end_hour_ist:02d}:00)"
+            )
+            return
+        return func(*args, **kwargs)
+    wrapper.__name__ = func.__name__
+    return wrapper
 
 def get_last_job() -> dict:
     if os.path.exists(TRACKER_FILE):
@@ -361,16 +398,24 @@ def schedule_jobs():
     # )
     # logger.info(f"[SCHEDULER] LinkedIn connections job scheduled at {connections_hour:02d}:{connections_minute:02d} daily.")
 
-    # ---- LinkedIn Acceptance Check Job (runs every 2 hours) ----
-    acceptance_interval_hours = int(os.getenv("LINKEDIN_ACCEPTANCE_INTERVAL_HOURS", "2"))
+    # ---- LinkedIn Acceptance Check Job (3x daily, IST business hours, with jitter) ----
+    # Fires at approx 09:30, 13:30, 16:30 IST (+ up to 15 min random jitter each time).
+    # UTC equivalents of the base times: 04:00, 08:00, 11:00
     _scheduler.add_job(
-        make_tracked_job(scheduled_linkedin_acceptance_check, job_id="linkedin_acceptance_check", job_name="LinkedIn Acceptance Check", max_retries=1, retry_delay_sec=linkedin_retry_delay),
-        "interval",
-        hours=acceptance_interval_hours,
+        make_tracked_job(
+            _with_jitter(scheduled_linkedin_acceptance_check, max_jitter_minutes=15),
+            job_id="linkedin_acceptance_check",
+            job_name="LinkedIn Acceptance Check",
+            max_retries=1,
+            retry_delay_sec=linkedin_retry_delay,
+        ),
+        "cron",
+        hour="4,8,11",
+        minute="0",
         id="linkedin_acceptance_check",
         replace_existing=True,
     )
-    logger.info(f"[SCHEDULER] LinkedIn acceptance check job scheduled every {acceptance_interval_hours} hour(s).")
+    logger.info("[SCHEDULER] LinkedIn acceptance check: 09:30 / 13:30 / 16:30 IST (±15 min jitter).")
 
     # ---- Pitch Delivery Job (email + LinkedIn DMs, runs after lead scoring) ----
     delivery_hour   = int(os.getenv("PITCH_DELIVERY_SCHEDULE_HOUR",   "14"))
@@ -385,16 +430,31 @@ def schedule_jobs():
     )
     logger.info(f"[SCHEDULER] Pitch delivery job scheduled at {delivery_hour:02d}:{delivery_minute:02d} daily.")
 
-    # ---- LinkedIn Reply Check Job (Hybrid: inbox scan + targeted thread check) ----
+    # ---- LinkedIn Reply Check Job (interval kept; business-hours gate + jitter added) ----
+    # Interval fires every 4h. Gate skips runs outside 09:00-21:00 IST (no overnight runs).
+    # Jitter adds 0-30 min random delay so the exact execution minute varies every cycle.
+    # Net result: ~3-4 actual runs per day at irregular times during waking hours.
     reply_interval_hours = int(os.getenv("REPLY_CHECK_INTERVAL_HOURS", "4"))
     _scheduler.add_job(
-        make_tracked_job(scheduled_pitch_reply_check, job_id="periodic_pitch_reply_check", job_name="Pitch Reply Check", max_retries=1, retry_delay_sec=linkedin_retry_delay),
+        make_tracked_job(
+            _with_jitter(
+                _business_hours_gate(scheduled_pitch_reply_check, start_hour_ist=9, end_hour_ist=21),
+                max_jitter_minutes=30,
+            ),
+            job_id="periodic_pitch_reply_check",
+            job_name="Pitch Reply Check",
+            max_retries=1,
+            retry_delay_sec=linkedin_retry_delay,
+        ),
         "interval",
         hours=reply_interval_hours,
         id="periodic_pitch_reply_check",
         replace_existing=True,
     )
-    logger.info(f"[SCHEDULER] Pitch reply check job scheduled every {reply_interval_hours} hour(s).")
+    logger.info(
+        f"[SCHEDULER] Pitch reply check: every {reply_interval_hours}h, "
+        "09:00–21:00 IST only, ±30 min jitter."
+    )
 
     _scheduler.start()
     return _scheduler

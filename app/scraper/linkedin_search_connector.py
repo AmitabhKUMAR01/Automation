@@ -54,6 +54,10 @@ class LinkedInWeeklyLimitError(Exception):
 SEARCH_CONNECT_LIMIT  = int(os.getenv("SEARCH_CONNECT_LIMIT",  "19"))
 NETWORK_CONNECT_LIMIT = int(os.getenv("NETWORK_CONNECT_LIMIT", "20"))
 
+# Max result pages to scan per keyword before moving to the next keyword.
+# Increase this so re-runs find people beyond page 1.
+SEARCH_MAX_PAGES = int(os.getenv("SEARCH_MAX_PAGES", "5"))
+
 # How long to wait (ms) for the first Invite button to appear after navigation
 RESULTS_WAIT_TIMEOUT = 15000
 
@@ -198,13 +202,20 @@ def _check_weekly_limit_error(page) -> bool:
     """
     Check if LinkedIn has shown a 'weekly limit reached' error
     in a toast notification or modal. Returns True if the limit is hit.
+
+    NOTE: Phrases must be specific enough to NOT match the normal
+    'Send your invitation to [Name]' modal that appears on every connect click.
     """
+    # These phrases appear ONLY in LinkedIn's actual weekly-limit error messages.
+    # "invitation to" was intentionally removed — it matches the normal invite modal too.
     error_phrases = [
         "weekly limit",
+        "invitation limit",
         "invitation was not sent",
-        "invitation to",
         "try again next week",
         "reached the limit",
+        "you've reached",
+        "too many invitations",
     ]
     try:
         # Check toast notifications (the most common way LinkedIn shows this)
@@ -219,11 +230,14 @@ def _check_weekly_limit_error(page) -> bool:
                 logger.warning(f"[SEARCH CONNECTOR] ⛔ Weekly limit toast detected: {txt[:120]}")
                 return True
 
-        # Also check if a dialog contains the error
+        # Also check if a dialog contains the error — but skip the normal invite modal
+        # (it contains 'send without a note', the limit dialog does not)
         dialog = page.locator("div[role='dialog']").first
         if dialog.count() > 0:
             txt = (dialog.inner_text() or "").lower()
-            if any(phrase in txt for phrase in error_phrases):
+            # The normal "Add a note" modal contains 'send without a note' — skip it
+            is_invite_modal = "send without a note" in txt or "add a note" in txt
+            if not is_invite_modal and any(phrase in txt for phrase in error_phrases):
                 logger.warning(f"[SEARCH CONNECTOR] ⛔ Weekly limit dialog detected: {txt[:120]}")
                 page.keyboard.press("Escape")
                 return True
@@ -323,105 +337,194 @@ def _wait_for_results(page, timeout: int = RESULTS_WAIT_TIMEOUT) -> bool:
         return False
 
 
+# ── Location filter via LinkedIn UI ──────────────────────────────────────────────────
+
+def _dismiss_linkedin_popups(page) -> None:
+    """
+    Close any LinkedIn promotional/modal popup that might block the
+    filter bar — specifically the Sales Navigator promo card that
+    appears inline over search results.
+    """
+    try:
+        # Target the × close button on the Sales Navigator promo
+        # and any generic artdeco dismiss buttons.
+        close_selectors = [
+            "button[aria-label='Dismiss']",
+            "button.artdeco-modal__dismiss",
+            "svg[data-test-icon='close-medium']",
+            "button[data-test-modal-close-btn]",
+            # inline promo card close button
+            "div.search-norms-disclaimer__dismiss-btn button",
+            "button:has-text('Dismiss')",
+        ]
+        for sel in close_selectors:
+            try:
+                btns = page.locator(sel).all()
+                for btn in btns[:2]:
+                    if btn.is_visible(timeout=300):
+                        btn.click()
+                        _rand_delay(0.2, 0.4)
+            except Exception:
+                continue
+
+        # Final Escape to close any remaining overlay
+        page.keyboard.press("Escape")
+        _rand_delay(0.4, 0.6)
+    except Exception:
+        pass
+
+
+
+
+
 # ── Phase 1: Search-based connections ─────────────────────────────────────────
 
 def _run_search_phase(page, db: Session, positions: list, location: str, profile_id: int) -> int:
     """
-    For each position: navigate to LinkedIn people search, wait for results,
-    and send up to SEARCH_CONNECT_LIMIT connections total.
+    For each position keyword: navigate to LinkedIn people search, applying the
+    location by appending it to the search keyword directly in the URL.
+    Then paginate up to SEARCH_MAX_PAGES and send up to SEARCH_CONNECT_LIMIT.
     """
     total_sent = 0
 
+    logger.info(f"[SEARCH CONNECTOR] 📍 Location '{location}' will be appended to keyword search.")
+
     for position in positions:
         if total_sent >= SEARCH_CONNECT_LIMIT:
-            logger.info(f"[SEARCH CONNECTOR] Reached search limit ({SEARCH_CONNECT_LIMIT}) — stopping.")
+            logger.info(
+                f"[SEARCH CONNECTOR] Reached search limit ({SEARCH_CONNECT_LIMIT}) — stopping."
+            )
             break
 
-        keyword    = f"{position} {location}"
-        search_url = (
-            f"https://www.linkedin.com/search/results/people/"
-            f"?keywords={quote(keyword)}&origin=GLOBAL_SEARCH_HEADER"
-        )
-
-        logger.info(f"\n[SEARCH CONNECTOR] 🔍 Searching: '{keyword}'")
-        page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-
-        # Wait for dynamic content to load
-        found = _wait_for_results(page)
-        if not found:
-            # Try scrolling to trigger lazy load
-            page.evaluate("window.scrollTo(0, 400)")
-            _rand_delay(2, 3)
-            found = _wait_for_results(page, timeout=8000)
-
-        _check_session(page)
-
-        # Scroll down to load more result cards
-        for _ in range(2):
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            _rand_delay(1, 1.5)
-
-        # Get all Invite/Connect buttons on the page
-        btns = _get_connect_buttons(page).all()
-        logger.info(f"[SEARCH CONNECTOR] Found {len(btns)} Connect button(s) for '{keyword}'")
-
         position_sent = 0
-        for btn in btns:
+
+        # ── Paginate through result pages for this keyword ─────────────────
+        for page_num in range(1, SEARCH_MAX_PAGES + 1):
             if total_sent >= SEARCH_CONNECT_LIMIT:
                 break
 
-            try:
-                aria     = btn.get_attribute("aria-label") or ""
-                name     = _extract_name_from_aria(aria)
-                if not name:
-                    name = _extract_name_from_nearby_dom(page, btn)
+            search_url = (
+                f"https://www.linkedin.com/search/results/people/"
+                f"?keywords={quote(f'{position} {location}')}"
+                f"&origin=GLOBAL_SEARCH_HEADER"
+                f"&page={page_num}"
+            )
 
-                # Skip if button is inside a dialog (not a result card)
-                in_dialog = btn.evaluate(
-                    "el => !!el.closest('[role=\"dialog\"]')"
+            logger.info(
+                f"\n[SEARCH CONNECTOR] 🔍 '{position} {location}' — page {page_num}/{SEARCH_MAX_PAGES}"
+            )
+            page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+            _wait_for_results(page)
+            _check_session(page)
+
+            # Scroll to load lazy-rendered result cards
+            for _ in range(2):
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                _rand_delay(1, 1.5)
+
+            btns = _get_connect_buttons(page).all()
+            logger.info(
+                f"[SEARCH CONNECTOR] Found {len(btns)} Connect button(s) on page {page_num}"
+            )
+
+            # No connect buttons → page exhausted (all Pending / no results)
+            if not btns:
+                logger.info(
+                    f"[SEARCH CONNECTOR] No Connect buttons on page {page_num} "
+                    f"— stopping pagination for '{position}'"
                 )
-                if in_dialog:
-                    continue
+                break
 
-                # Skip navigation/sidebar buttons (text is plain 'Connect' but not in a card)
-                btn_text = (btn.inner_text() or "").strip()
-                if btn_text.lower() not in ("connect", "+ connect") and "invite" not in aria.lower():
-                    continue
+            page_sent = 0
+            for btn in btns:
+                if total_sent >= SEARCH_CONNECT_LIMIT:
+                    break
 
-                profile_url = _find_profile_url_near_button(page, btn)
+                try:
+                    aria = btn.get_attribute("aria-label") or ""
+                    name = _extract_name_from_aria(aria)
+                    if not name:
+                        name = _extract_name_from_nearby_dom(page, btn)
 
-                # Dedup check
-                if profile_url and _already_sent(db, profile_url):
-                    logger.info(f"[SEARCH CONNECTOR] Already contacted '{name}' — skipping")
-                    continue
-
-                sent = _send_connection_from_button(page, btn)
-
-                if sent:
-                    _save_contact(db, name, profile_url or "", position, location, "search", profile_id)
-                    total_sent    += 1
-                    position_sent += 1
-                    logger.info(
-                        f"[SEARCH CONNECTOR] ✅ Sent to '{name}' "
-                        f"({total_sent}/{SEARCH_CONNECT_LIMIT}) [{position}]"
+                    # Skip buttons inside a dialog (not a result card)
+                    in_dialog = btn.evaluate(
+                        "el => !!el.closest('[role=\"dialog\"]')"
                     )
-                    _rand_delay(3, 5)
-                else:
-                    logger.info(f"[SEARCH CONNECTOR] ⚠️  Could not send to '{name}' — skipping")
+                    if in_dialog:
+                        continue
 
-            except LinkedInSessionExpiredError:
-                raise
-            except LinkedInWeeklyLimitError:
-                logger.warning("[SEARCH CONNECTOR] ⛔ Weekly limit hit — stopping search phase.")
-                raise  # stop entire job
-            except Exception as exc:
-                logger.info(f"[SEARCH CONNECTOR] Error on button: {exc} — skipping")
-                continue
+                    # Skip navigation/sidebar Connect buttons
+                    btn_text = (btn.inner_text() or "").strip()
+                    if (
+                        btn_text.lower() not in ("connect", "+ connect")
+                        and "invite" not in aria.lower()
+                    ):
+                        continue
 
-        logger.info(f"[SEARCH CONNECTOR] '{position}' done — sent {position_sent} connection(s).")
+                    profile_url = _find_profile_url_near_button(page, btn)
+
+                    # Dedup — skip anyone we've already contacted
+                    if profile_url and _already_sent(db, profile_url):
+                        logger.info(
+                            f"[SEARCH CONNECTOR] Already contacted '{name}' — skipping"
+                        )
+                        continue
+
+                    sent = _send_connection_from_button(page, btn)
+
+                    if sent:
+                        _save_contact(
+                            db, name, profile_url or "", position, location, "search", profile_id
+                        )
+                        total_sent    += 1
+                        position_sent += 1
+                        page_sent     += 1
+                        logger.info(
+                            f"[SEARCH CONNECTOR] ✅ Sent to '{name}' "
+                            f"({total_sent}/{SEARCH_CONNECT_LIMIT}) "
+                            f"[{position} · p{page_num}]"
+                        )
+                        _rand_delay(3, 5)
+                    else:
+                        logger.info(
+                            f"[SEARCH CONNECTOR] ⚠️  Could not send to '{name}' — skipping"
+                        )
+
+                except LinkedInSessionExpiredError:
+                    raise
+                except LinkedInWeeklyLimitError:
+                    logger.warning(
+                        "[SEARCH CONNECTOR] ⛔ Weekly limit hit — stopping search phase."
+                    )
+                    raise
+                except Exception as exc:
+                    logger.info(f"[SEARCH CONNECTOR] Error on button: {exc} — skipping")
+                    continue
+
+            logger.info(
+                f"[SEARCH CONNECTOR] Page {page_num} done — "
+                f"{page_sent} new connection(s) sent this page"
+            )
+
+            # Sparse/exhausted page — stop paginating
+            if page_sent == 0 and len(btns) < 5:
+                logger.info(
+                    f"[SEARCH CONNECTOR] Sparse/exhausted results on page {page_num} "
+                    f"— stopping pagination for '{position}'"
+                )
+                break
+
+            _rand_delay(2, 3)   # polite delay between pages
+
+        logger.info(
+            f"[SEARCH CONNECTOR] '{position}' complete — "
+            f"{position_sent} connection(s) sent."
+        )
         _rand_delay(3, 5)
 
-    logger.info(f"[SEARCH CONNECTOR] 🏁 Search phase complete — total sent: {total_sent}")
+    logger.info(
+        f"[SEARCH CONNECTOR] 🏁 Search phase complete — total sent: {total_sent}"
+    )
     return total_sent
 
 
@@ -546,7 +649,6 @@ def run_linkedin_search_and_send_connections(
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
             headless=HEADLESS,
-            slow_mo=600,
             args=["--disable-blink-features=AutomationControlled"],
         )
         context = browser.new_context(
@@ -597,7 +699,10 @@ def run_linkedin_search_and_send_connections(
                 db.commit()
             except Exception:
                 pass
-            browser.close()
+            try:
+                browser.close()
+            except Exception:
+                pass   # silences "Connection closed" error on Ctrl+C
 
     logger.info(
         f"[SEARCH CONNECTOR] 📊 Summary — "

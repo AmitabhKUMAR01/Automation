@@ -44,54 +44,128 @@ def _rand_delay(lo: float = 1.5, hi: float = 3.5):
     time.sleep(random.uniform(lo, hi))
 
 
+def _handle_welcome_back_page(page) -> bool:
+    """
+    Handle LinkedIn's 'Welcome Back' page.
+
+    This page appears when a saved session is loaded from a different
+    IP/machine. LinkedIn recognises the account (shows the user's photo
+    and name) but requires a single click on the account tile to continue.
+
+    Strategy — try several selectors in order of specificity:
+      1. Explicit aria-label / data-aut-id attributes LinkedIn has used historically
+      2. The first <button> inside the sign-in form (most robust fallback)
+      3. Any visible <button> whose text contains the word 'continue'
+
+    Returns True if the click succeeded and we navigated away from /login.
+    Returns False if every selector fails (caller will raise SessionExpiredError).
+    """
+    logger.info("[LINKEDIN] 👋 'Welcome Back' page detected — attempting auto-click on account tile...")
+
+    # Selectors tried in priority order (most specific → most generic)
+    account_selectors = [
+        # LinkedIn-specific attributes seen in the wild
+        "[data-aut-id='account-picker-user-account']",
+        "button[aria-label*='Sign in as']",
+        "button[aria-label*='sign in as']",
+        # Class-based selectors observed in different LinkedIn UI versions
+        "button.sign-in-card--account",
+        "div.sign-in-modal__account-btn",
+        ".base-sign-in-hide-if-logged-in button",
+        # Generic fallbacks
+        "form button:first-of-type",          # first button in sign-in form
+        "button:has-text('Continue')",
+        "button:has-text('Sign in')",
+    ]
+
+    for selector in account_selectors:
+        try:
+            btn = page.locator(selector).first
+            if btn.count() > 0 and btn.is_visible(timeout=2000):
+                logger.info(f"[LINKEDIN] 🖱️  Clicking account tile ({selector})")
+                btn.click()
+                # Wait until we leave the /login / /uas namespace
+                page.wait_for_url(
+                    lambda u: "/login" not in u and "/uas" not in u,
+                    timeout=20000,
+                )
+                logger.info(f"[LINKEDIN] ✅ Welcome Back bypassed → {page.url}")
+                _rand_delay(1.5, 2.5)   # brief pause after redirect
+                return True
+        except Exception:
+            continue   # try the next selector
+
+    logger.warning("[LINKEDIN] ⚠️  Could not find/click account tile on Welcome Back page.")
+    return False
+
+
 def _check_session(page) -> None:
     """
     Validate the browser is still on a legitimate LinkedIn page.
 
-    Handles two distinct cases:
-      1. Auto-signin redirect ("We're signing you in") — /login?session_redirect=...
-         LinkedIn does this automatically. We wait up to 20s for it to finish.
-      2. Real expiry / challenge — /login (no redirect), /checkpoint, /authwall.
+    Handles three distinct cases:
+      1. 'Welcome Back' page (different IP/machine) — auto-click the account tile.
+      2. Auto-signin redirect ("We're signing you in") — wait for completion.
+      3. Real expiry / challenge — /login (no redirect), /checkpoint, /authwall.
     """
     url = page.url.lower()
 
-    # ── Case 1: LinkedIn auto-signin redirect ─────────────────────────────────
-    # URL looks like: /login?session_redirect=https%3A%2F%2Fwww.linkedin.com%2Ffeed%2F
-    # This is NOT expired — LinkedIn is re-authenticating automatically.
-    # Wait for it to complete and land on the real page.
+    # ── Case 1: LinkedIn 'Welcome Back' page (cross-machine session reuse) ─────
+    # URL: /login?session_redirect=...&skipRedirect=true
+    # LinkedIn knows the account but needs a click to confirm the device.
     if "/login" in url and "session_redirect" in url:
-        logger.info("[LINKEDIN] ⏳ Auto-signin redirect detected — waiting for completion...")
         try:
-            page.wait_for_url(
-                lambda u: (
-                    "/feed" in u
-                    or "/jobs" in u
-                    or "/mynetwork" in u
-                    or "/checkpoint" in u
-                    or "/authwall" in u
-                    or ("/login" in u and "session_redirect" not in u)
-                ),
-                timeout=20000,
-            )
-            url = page.url.lower()
-            logger.info(f"[LINKEDIN] ↩  Auto-signin completed → {page.url}")
-        except PlaywrightTimeout:
-            raise LinkedInSessionExpiredError(
-                "\n\n⚠️  LinkedIn auto-signin timed out (stuck on sign-in page).\n"
-                "   Re-run:  python app/scraper/linkdin/save_state.py\n"
-            )
+            body_text = page.locator("body").inner_text(timeout=3000).lower()
+        except Exception:
+            body_text = ""
 
-    # ── Case 2: Check page.title() — catches mid-navigation context destruction
+        if "welcome back" in body_text:
+            # Auto-click the account tile to continue
+            clicked = _handle_welcome_back_page(page)
+            if not clicked:
+                raise LinkedInSessionExpiredError(
+                    "\n\n⚠️  LinkedIn showed 'Welcome Back' but auto-click failed.\n"
+                    "   This usually means the session needs to be refreshed on this machine.\n"
+                    "   Re-run:  python linkedin_login.py --profile <id>\n"
+                )
+            # Successfully clicked through — re-read the current URL and fall through
+            url = page.url.lower()
+
+        else:
+            # ── Case 2: Regular auto-signin redirect ──────────────────────────
+            # LinkedIn is silently re-authenticating. Wait for it to complete.
+            logger.info("[LINKEDIN] ⏳ Auto-signin redirect detected — waiting for completion...")
+            try:
+                page.wait_for_url(
+                    lambda u: (
+                        "/feed" in u
+                        or "/jobs" in u
+                        or "/mynetwork" in u
+                        or "/checkpoint" in u
+                        or "/authwall" in u
+                        or ("/login" in u and "session_redirect" not in u)
+                    ),
+                    timeout=20000,
+                )
+                url = page.url.lower()
+                logger.info(f"[LINKEDIN] ↩  Auto-signin completed → {page.url}")
+            except PlaywrightTimeout:
+                raise LinkedInSessionExpiredError(
+                    "\n\n⚠️  LinkedIn auto-signin timed out (stuck on sign-in page).\n"
+                    "   Re-run:  python linkedin_login.py --profile <id>\n"
+                )
+
+    # ── Case 3: Check page.title() — catches mid-navigation context destruction
     try:
         title = page.title().lower()
     except Exception:
         # "Execution context was destroyed" = LinkedIn did a forced redirect mid-page
         raise LinkedInSessionExpiredError(
             "\n\n⚠️  LinkedIn issued a mid-navigation challenge!\n"
-            "   Re-run:  python app/scraper/linkdin/save_state.py\n"
+            "   Re-run:  python linkedin_login.py --profile <id>\n"
         )
 
-    # ── Case 3: Real expired / challenged states ──────────────────────────────
+    # ── Case 4: Real expired / challenged states ──────────────────────────────
     is_real_login = "/login" in url and "session_redirect" not in url
     if (
         is_real_login
@@ -102,7 +176,7 @@ def _check_session(page) -> None:
     ):
         raise LinkedInSessionExpiredError(
             "\n\n⚠️  LinkedIn session expired or account challenged!\n"
-            "   Re-run:  python app/scraper/linkdin/save_state.py\n"
+            "   Re-run:  python linkedin_login.py --profile <id>\n"
             "   Then retry the LinkedIn search.\n"
         )
 

@@ -528,12 +528,102 @@ def _run_search_phase(page, db: Session, positions: list, location: str, profile
     return total_sent
 
 
-# ── Phase 2: My Network "People you may know" ─────────────────────────────────
+def _find_target_show_all_link(page):
+    """
+    Find the 'Show all' link STRICTLY for 'People you may know based on your recent activity'.
+    Returns (locator, heading_title) or (None, "").
+    """
+    try:
+        links = page.locator(
+            "a:has-text('Show all'), "
+            "button:has-text('Show all'), "
+            "a[aria-label*='Show all']"
+        ).all()
+
+        for sa in links:
+            try:
+                lbl = sa.get_attribute("aria-label") or ""
+                href = sa.get_attribute("href") or ""
+
+                # Ignore invitation manager links
+                if "invitation" in lbl.lower() or "invitation-manager" in href.lower():
+                    continue
+
+                heading = sa.evaluate("""
+                    el => {
+                        let node = el;
+                        for (let i = 0; i < 8; i++) {
+                            if (!node || !node.parentElement) break;
+                            node = node.parentElement;
+                            const h = node.querySelector("h1, h2, h3, h4");
+                            if (h) return (h.innerText || '').trim();
+                        }
+                        return "";
+                    }
+                """) or ""
+
+                text_combo = f"{lbl} {heading}".lower()
+
+                # STRICT MATCH ONLY: "recent activity" / "people you may know based on your recent activity"
+                if "recent activity" in text_combo:
+                    title = heading or lbl or "People you may know based on your recent activity"
+                    return sa, title
+            except Exception:
+                pass
+    except Exception as exc:
+        logger.info(f"[SEARCH CONNECTOR] Error finding target Show all link: {exc}")
+    return None, ""
+
+
+def _find_recent_activity_section(page):
+    """
+    Find section element strictly matching heading 'People you may know based on your recent activity'.
+    """
+    try:
+        headers = page.locator("h1, h2, h3, h4").all()
+        for h in headers:
+            txt = (h.inner_text() or "").strip()
+            if "recent activity" in txt.lower():
+                sec = h.locator("xpath=ancestor::section[1]")
+                if sec.count() > 0:
+                    return sec
+    except Exception:
+        pass
+    return None
+
+
+def _scroll_page_container(page, amount: int = 700) -> None:
+    """
+    Scroll LinkedIn's actual layout container (#workspace / main / .scaffold-layout__main)
+    as well as window/body, and dispatch mouse wheel event so lazy-loading triggers properly.
+    """
+    try:
+        page.evaluate(
+            """
+            (amt) => {
+                const main = document.querySelector('#workspace, main, div.scaffold-layout__main, .scaffold-layout__content');
+                if (main && main.scrollHeight > main.clientHeight) {
+                    main.scrollTop += amt;
+                }
+                window.scrollBy(0, amt);
+            }
+            """,
+            amount,
+        )
+        try:
+            page.mouse.wheel(0, amount)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+# ── Phase 2: My Network "People you may know based on your recent activity" ───
 
 def _run_network_phase(page, db: Session, location: str, profile_id: int) -> int:
     """
-    Navigate to My Network, click 'Show all' for 'People you may know',
-    and send up to NETWORK_CONNECT_LIMIT connections.
+    Navigate to My Network, click 'Show all' STRICTLY for 'People you may know based on your recent activity',
+    and send up to NETWORK_CONNECT_LIMIT connections strictly to cards from this section.
     """
     total_sent = 0
     GROW_URL   = "https://www.linkedin.com/mynetwork/grow/"
@@ -543,33 +633,66 @@ def _run_network_phase(page, db: Session, location: str, profile_id: int) -> int
     _rand_delay(3, 4)
     _check_session(page)
 
-    # Scroll to trigger section loading
-    page.evaluate("window.scrollTo(0, 600)")
-    _rand_delay(1.5, 2)
+    # Progressive scroll loop to trigger LinkedIn lazy loading and discover 'People you may know based on your recent activity'
+    show_all_link = None
+    section_heading = ""
+    section_container = None
+    clicked_show_all = False
 
-    # Click the 'Show all' link that points back to /mynetwork/grow/ (the PYMK section)
-    try:
-        show_all = page.locator("a[href*='mynetwork/grow']").filter(has_text="Show all").first
-        if show_all.count() > 0 and show_all.is_visible(timeout=5000):
-            logger.info("[SEARCH CONNECTOR] Clicking 'Show all' on People you may know")
-            show_all.click()
+    logger.info("[SEARCH CONNECTOR] 🔍 Scanning for 'People you may know based on your recent activity'...")
+    for attempt in range(1, 9):
+        # Check for 'Show all' link matching "recent activity"
+        show_all_link, section_heading = _find_target_show_all_link(page)
+        if show_all_link and show_all_link.is_visible():
+            break
+
+        # Check for inline section container matching "recent activity"
+        section_container = _find_recent_activity_section(page)
+        if section_container:
+            break
+
+        # Scroll down progressively to trigger lazy loading of deeper sections
+        _scroll_page_container(page, 700)
+        _rand_delay(1.5, 2.0)
+
+    if show_all_link and show_all_link.is_visible():
+        logger.info(f"[SEARCH CONNECTOR] Strictly matched 'Show all' for: '{section_heading}' — clicking")
+        try:
+            show_all_link.click(force=True)
             _rand_delay(2, 3)
             _check_session(page)
-        else:
-            logger.info("[SEARCH CONNECTOR] 'Show all' not visible — proceeding with current page")
-    except Exception as exc:
-        logger.info(f"[SEARCH CONNECTOR] Could not click Show all: {exc}")
+            clicked_show_all = True
+        except Exception as exc:
+            logger.info(f"[SEARCH CONNECTOR] Could not click Show all: {exc}")
+    elif section_container:
+        logger.info("[SEARCH CONNECTOR] Found 'People you may know based on your recent activity' inline section on page")
+    else:
+        logger.warning(
+            "[SEARCH CONNECTOR] ⚠️ Section 'People you may know based on your recent activity' "
+            "not found after scanning page — skipping network phase strictly."
+        )
+        return 0
 
     # Wait for connect buttons to appear
     _wait_for_results(page)
 
-    # Scroll to load more
+    # Scroll to load lazy items
     for _ in range(3):
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        _scroll_page_container(page, 800)
         _rand_delay(1.5, 2)
 
-    btns = _get_connect_buttons(page).all()
-    logger.info(f"[SEARCH CONNECTOR] Found {len(btns)} Connect button(s) on My Network page")
+    # Get Connect buttons (scoped strictly to section_container if inline, or full expanded page if Show All clicked)
+    if clicked_show_all:
+        btns = _get_connect_buttons(page).all()
+    else:
+        btns = section_container.locator(
+            "button[aria-label*='Invite'][aria-label*='connect'], "
+            "button[aria-label*='Connect'], "
+            "button:has-text('Connect'), "
+            "a:has-text('Connect')"
+        ).all()
+
+    logger.info(f"[SEARCH CONNECTOR] Found {len(btns)} Connect button(s) strictly for 'People you may know based on your recent activity'")
 
     for btn in btns:
         if total_sent >= NETWORK_CONNECT_LIMIT:

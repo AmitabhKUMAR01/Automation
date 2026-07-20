@@ -441,7 +441,9 @@ def _run_search_phase(page, db: Session, positions: list, location: str, profile
                     break
 
                 try:
-                    aria = btn.get_attribute("aria-label") or ""
+                    if not btn.is_visible(timeout=2000):
+                        continue
+                    aria = btn.get_attribute("aria-label", timeout=2000) or ""
                     name = _extract_name_from_aria(aria)
                     if not name:
                         name = _extract_name_from_nearby_dom(page, btn)
@@ -699,7 +701,9 @@ def _run_network_phase(page, db: Session, location: str, profile_id: int) -> int
             break
 
         try:
-            aria = btn.get_attribute("aria-label") or ""
+            if not btn.is_visible(timeout=2000):
+                continue
+            aria = btn.get_attribute("aria-label", timeout=2000) or ""
             name = _extract_name_from_aria(aria)
 
             in_dialog = btn.evaluate("el => !!el.closest('[role=\"dialog\"]')")

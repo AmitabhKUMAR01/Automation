@@ -76,7 +76,7 @@ def run_next_job():
     finally:
         _job_lock.release()  ## release so next job can run
 
-def _run_job_for_profiles(job_name: str, func):
+def _run_job_for_profiles(job_name: str, func, single_profile_per_run: bool = False):
     db = SessionLocal()
     try:
         profiles = (
@@ -96,6 +96,9 @@ def _run_job_for_profiles(job_name: str, func):
                 func(profile_id=profile.id)
                 profile.last_used_at = datetime.now(timezone.utc)
                 db.commit()
+                if single_profile_per_run:
+                    logger.info(f"[SCHEDULER] Single profile mode active for {job_name} — stopping after Profile {profile.id} ({profile.name})")
+                    break
             else:
                 logger.info(f"[SCHEDULER] Skipping {job_name} for Profile {profile.id} ({profile.name}) - not in allowed processes")
     except Exception as exc:
@@ -104,7 +107,7 @@ def _run_job_for_profiles(job_name: str, func):
         db.close()
 
 def scheduled_linkedin_batch():
-    _run_job_for_profiles("daily_linkedin_search", run_linkedin_search_and_connect)
+    _run_job_for_profiles("daily_linkedin_search", run_linkedin_search_and_connect, single_profile_per_run=True)
 
 def scheduled_linkedin_connections():
     _run_job_for_profiles("daily_linkedin_connections", run_linkedin_daily_connections)
@@ -242,8 +245,9 @@ def _get_linkedin_search_schedule() -> tuple[int, int]:
                 .first()
             )
             if config and config.schedule_time:
-                time_str = config.schedule_time  # e.g. "14:00"
-                hour_ist, minute_ist = map(int, time_str.split(":"))
+                time_str = config.schedule_time  # e.g. "14:00" or "14:00:00"
+                parts = time_str.split(":")
+                hour_ist, minute_ist = int(parts[0]), int(parts[1])
                 # Convert IST (UTC+5:30) → UTC
                 total_minutes_utc = hour_ist * 60 + minute_ist - 5 * 60 - 30
                 if total_minutes_utc < 0:

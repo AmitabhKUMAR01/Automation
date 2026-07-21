@@ -234,7 +234,6 @@ def _get_linkedin_search_schedule() -> tuple[int, int]:
     """
     Read the schedule time from the active LinkedinSearchConfig row.
     Falls back to LINKEDIN_SCHEDULE_HOUR / LINKEDIN_SCHEDULE_MINUTE env vars.
-    Converts from IST (UTC+5:30) to UTC for APScheduler.
     """
     try:
         db = SessionLocal()
@@ -247,18 +246,11 @@ def _get_linkedin_search_schedule() -> tuple[int, int]:
             if config and config.schedule_time:
                 time_str = config.schedule_time  # e.g. "14:00" or "14:00:00"
                 parts = time_str.split(":")
-                hour_ist, minute_ist = int(parts[0]), int(parts[1])
-                # Convert IST (UTC+5:30) → UTC
-                total_minutes_utc = hour_ist * 60 + minute_ist - 5 * 60 - 30
-                if total_minutes_utc < 0:
-                    total_minutes_utc += 24 * 60
-                hour_utc   = (total_minutes_utc // 60) % 24
-                minute_utc = total_minutes_utc % 60
+                hour, minute = int(parts[0]), int(parts[1])
                 logger.info(
-                    f"[SCHEDULER] LinkedIn schedule from DB: {hour_ist:02d}:{minute_ist:02d} IST "
-                    f"→ {hour_utc:02d}:{minute_utc:02d} UTC"
+                    f"[SCHEDULER] LinkedIn schedule from DB: {hour:02d}:{minute:02d}"
                 )
-                return hour_utc, minute_utc
+                return hour, minute
         finally:
             db.close()
     except Exception as exc:
@@ -266,8 +258,8 @@ def _get_linkedin_search_schedule() -> tuple[int, int]:
 
     # Fallback to env vars
     return (
-        int(os.getenv("LINKEDIN_SCHEDULE_HOUR",   "8")),
-        int(os.getenv("LINKEDIN_SCHEDULE_MINUTE",  "30")),
+        int(os.getenv("LINKEDIN_SCHEDULE_HOUR",   "13")),
+        int(os.getenv("LINKEDIN_SCHEDULE_MINUTE",  "45")),
     )
 
 

@@ -215,7 +215,7 @@ def run_linkedin_acceptance_check(profile_id: int = 1) -> None:
     db = SessionLocal()
     try:
         logger.info("[LINKEDIN ACCEPTANCE] Starting daily acceptance check.")
-        result = check_recent_connections(db)
+        result = check_recent_connections(db, profile_id=profile_id)
         logger.info(
             f"[LINKEDIN ACCEPTANCE] Done — checked={result['checked']}, "
             f"newly_accepted={result['newly_accepted']}, names={result['names']}"

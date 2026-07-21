@@ -267,11 +267,11 @@ def schedule_jobs():
     global _scheduler
     config    = load_config()
     times     = config.get("schedule_times", ["08:00"])
-    executors = {"default": ThreadPoolExecutor(max_workers=1)}
+    executors = {"default": ThreadPoolExecutor(max_workers=3)}
     job_defaults = {
         "coalesce"          : True,
         "max_instances"     : 1,
-        "misfire_grace_time": 60
+        "misfire_grace_time": 3600
     }
 
     _scheduler = BackgroundScheduler(executors=executors, job_defaults=job_defaults)

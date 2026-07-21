@@ -379,6 +379,125 @@ def _dismiss_linkedin_popups(page) -> None:
 
 # ── Phase 1: Search-based connections ─────────────────────────────────────────
 
+import re
+
+def _apply_location_filter_via_ui(page, location: str) -> bool:
+    from app.utils.logger import logger
+    from app.scraper.linkedin_finder import _rand_delay
+    
+    logger.info(f"[SEARCH CONNECTOR] Opening location filter panel...")
+    opened = False
+    for sel in (
+        "button.search-reusables__all-filters-pill-button",
+        "button:has-text('All filters')",
+        "button[aria-label*='Locations']",
+        "button:has-text('Locations')",
+    ):
+        try:
+            btn = page.locator(sel).first
+            if btn.count() > 0 and btn.is_visible(timeout=3000):
+                btn.click(force=True)
+                _rand_delay(1, 1.5)
+                opened = True
+                break
+        except Exception:
+            continue
+
+    if not opened:
+        logger.warning("[SEARCH CONNECTOR] Could not open LinkedIn location filter UI")
+        return False
+
+    for btn_sel in (
+        "button:has-text('Add a location')",
+        "button[aria-label*='Add a location']",
+        "button.search-reusables__collection-filter-show-more",
+    ):
+        try:
+            add_btn = page.locator(btn_sel).first
+            if add_btn.count() > 0 and add_btn.is_visible(timeout=1000):
+                add_btn.click(force=True)
+                _rand_delay(0.5, 1)
+                break
+        except Exception:
+            pass
+
+    loc_input = None
+    for sel in (
+        "input[placeholder*='Add a location']",
+        "input[placeholder*='location']",
+        "input[aria-label*='Location']",
+        "input[aria-label*='location']",
+        "div[role='dialog'] input[type='text']",
+        "div.search-reusables__filters-bar input[type='text']",
+    ):
+        try:
+            el = page.locator(sel).first
+            if el.count() > 0 and el.is_visible(timeout=2000):
+                loc_input = el
+                break
+        except Exception:
+            continue
+
+    if not loc_input:
+        logger.warning("[SEARCH CONNECTOR] Could not find location input in filter UI")
+        page.keyboard.press("Escape")
+        return False
+
+    loc_input.click()
+    loc_input.fill("")
+    loc_input.type(location, delay=80)
+    _rand_delay(1.5, 2)
+
+    selected = False
+    for sel in (
+        "div.basic-typeahead__selectable:visible",
+        "li.basic-typeahead__selectable:visible",
+        "div.search-typeahead-v2__hit:visible",
+        "div[role='option']:visible",
+        f"div[role='checkbox']:has-text('{location}')",
+        f"div[role='checkbox']:has-text('{location.title()}')",
+    ):
+        try:
+            opt = page.locator(sel).first
+            if opt.count() > 0:
+                opt.wait_for(state="visible", timeout=3000)
+                opt.click(force=True)
+                selected = True
+                _rand_delay(0.5, 1)
+                break
+        except Exception:
+            continue
+
+    if not selected:
+        logger.warning(f"[SEARCH CONNECTOR] No typeahead match found for location '{location}'")
+        page.keyboard.press("Escape")
+        return False
+
+    clicked_show = page.evaluate("""
+        () => {
+            const btns = Array.from(document.querySelectorAll('button, div[role="button"], a, span[role="button"]'));
+            for (const b of btns) {
+                const txt = (b.innerText || '').toLowerCase().trim();
+                if (txt === 'show results' || txt.includes('show results') || txt.includes('apply current filters')) {
+                    if (b.offsetParent !== null) {
+                        b.click();
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    """)
+    if clicked_show:
+        _rand_delay(2, 3)
+    else:
+        page.keyboard.press("Enter")
+        _rand_delay(2, 3)
+        
+    return True
+
+
+
 def _run_search_phase(page, db: Session, positions: list, location: str, profile_id: int) -> int:
     """
     For each position keyword: navigate to LinkedIn people search, applying the
@@ -399,23 +518,46 @@ def _run_search_phase(page, db: Session, positions: list, location: str, profile
         position_sent = 0
 
         # ── Paginate through result pages for this keyword ─────────────────
+        base_search_url = ""
         for page_num in range(1, SEARCH_MAX_PAGES + 1):
             if total_sent >= SEARCH_CONNECT_LIMIT:
                 break
 
-            search_url = (
-                f"https://www.linkedin.com/search/results/people/"
-                f"?keywords={quote(f'{position} {location}')}"
-                f"&origin=GLOBAL_SEARCH_HEADER"
-                f"&page={page_num}"
-            )
-
-            logger.info(
-                f"\n[SEARCH CONNECTOR] 🔍 '{position} {location}' — page {page_num}/{SEARCH_MAX_PAGES}"
-            )
-            page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-            _wait_for_results(page)
-            _check_session(page)
+            if page_num == 1:
+                search_url = (
+                    f"https://www.linkedin.com/search/results/people/"
+                    f"?keywords={quote(position)}"
+                    f"&origin=GLOBAL_SEARCH_HEADER"
+                )
+                logger.info(
+                    f"\n[SEARCH CONNECTOR] 🔍 '{position}' — applying '{location}' filter via UI (page 1/{SEARCH_MAX_PAGES})"
+                )
+                page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+                _wait_for_results(page)
+                _check_session(page)
+                _dismiss_linkedin_popups(page)
+                
+                # Apply filter
+                _apply_location_filter_via_ui(page, location)
+                
+                # Verify / wait for results
+                if not _wait_for_results(page):
+                    logger.warning("[SEARCH CONNECTOR] ⚠️ Results didn't load immediately, reloading page with applied filter...")
+                    page.reload(wait_until="domcontentloaded", timeout=30000)
+                    _wait_for_results(page)
+                    
+                # Cache the URL (which now has geoUrn) for subsequent pages
+                base_search_url = page.url
+            else:
+                # Remove any existing page parameter if present
+                base = base_search_url.split("&page=")[0]
+                page_url = f"{base}&page={page_num}"
+                logger.info(
+                    f"\n[SEARCH CONNECTOR] 🔍 '{position}' + '{location}' — page {page_num}/{SEARCH_MAX_PAGES}"
+                )
+                page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
+                _wait_for_results(page)
+                _check_session(page)
 
             # Scroll to load lazy-rendered result cards
             for _ in range(2):

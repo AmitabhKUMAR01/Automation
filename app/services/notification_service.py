@@ -53,10 +53,11 @@ def notify_connection_accepted(
     contact_name: str,
     profile_url: str,
     company_name: str,
+    profile_name: str = "",
 ) -> None:
     """Send an alert when a LinkedIn connection request is accepted."""
     try:
-        get_channel().send_connection_accepted(contact_name, profile_url, company_name)
+        get_channel().send_connection_accepted(contact_name, profile_url, company_name, profile_name=profile_name)
     except Exception as exc:
         logger.error(f"[NOTIFY] ❌ Failed to send connection accepted notification: {exc}")
 

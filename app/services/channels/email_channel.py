@@ -129,13 +129,19 @@ class EmailNotificationChannel(NotificationChannel):
         contact_name: str,
         profile_url: str,
         company_name: str,
+        profile_name: str = "",
     ) -> None:
         subject = f"🤝 LinkedIn Connection Accepted — {contact_name}"
-        rows = [
+        if profile_name:
+            subject += f" ({profile_name})"
+        rows = []
+        if profile_name:
+            rows.append(("Accepted For Profile", profile_name))
+        rows.extend([
             ("Contact",    contact_name),
             ("Company",    company_name),
             ("Profile",    f"<a href='{profile_url}'>{profile_url}</a>"),
-        ]
+        ])
         body = _card(
             "🤝", "Connection Accepted", "#27ae60", rows,
             note="This contact has accepted your LinkedIn connection request. Consider sending your pitch."

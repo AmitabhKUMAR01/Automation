@@ -20,6 +20,7 @@ class NotificationChannel(ABC):
         contact_name: str,
         profile_url: str,
         company_name: str,
+        profile_name: str = "",
     ) -> None:
         """Called when a LinkedIn connection request is accepted."""
         ...

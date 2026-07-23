@@ -18,6 +18,7 @@ from app.models.linkedin_contact import LinkedinContact
 from app.models.linkedin_search_contact import LinkedinSearchContact
 from app.models.business_client import Business_Client
 from app.models.linkedin_search_config import LinkedinSearchConfig
+from app.models.profile_setting import ProfileSetting
 
 MAX_CONCURRENT_PROFILES = int(os.getenv("MAX_CONCURRENT_PROFILES", "1"))
 _linkedin_semaphore = threading.BoundedSemaphore(MAX_CONCURRENT_PROFILES)
@@ -214,7 +215,10 @@ def run_linkedin_acceptance_check(profile_id: int = 1) -> None:
 
     db = SessionLocal()
     try:
-        logger.info("[LINKEDIN ACCEPTANCE] Starting daily acceptance check.")
+        profile = db.query(ProfileSetting).filter(ProfileSetting.id == profile_id).first()
+        profile_name = profile.name if (profile and profile.name) else f"Profile #{profile_id}"
+
+        logger.info(f"[LINKEDIN ACCEPTANCE] Starting daily acceptance check for profile '{profile_name}' (id={profile_id}).")
         result = check_recent_connections(db, profile_id=profile_id)
         logger.info(
             f"[LINKEDIN ACCEPTANCE] Done — checked={result['checked']}, "
@@ -254,6 +258,7 @@ def run_linkedin_acceptance_check(profile_id: int = 1) -> None:
                 contact_name = name,
                 profile_url  = profile_url,
                 company_name = company_name,
+                profile_name = profile_name,
             )
     except Exception as exc:
         logger.info(f"[LINKEDIN ACCEPTANCE] Unexpected error: {exc}")

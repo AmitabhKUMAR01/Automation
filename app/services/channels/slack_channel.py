@@ -76,9 +76,19 @@ class SlackNotificationChannel(NotificationChannel):
         contact_name: str,
         profile_url: str,
         company_name: str,
+        profile_name: str = "",
     ) -> None:
+        profile_str = f" for profile *{profile_name}*" if profile_name else ""
+        fields = []
+        if profile_name:
+            fields.append({"type": "mrkdwn", "text": f"*Account Profile:*\n{profile_name}"})
+        fields.extend([
+            {"type": "mrkdwn", "text": f"*Contact:*\n{contact_name}"},
+            {"type": "mrkdwn", "text": f"*Company:*\n{company_name}"},
+            {"type": "mrkdwn", "text": f"*Profile:*\n<{profile_url}|View on LinkedIn>"},
+        ])
         _post({
-            "text": f":handshake: LinkedIn connection accepted: *{contact_name}* ({company_name})",
+            "text": f":handshake: LinkedIn connection accepted{profile_str}: *{contact_name}* ({company_name})",
             "blocks": [
                 {
                     "type": "header",
@@ -86,11 +96,7 @@ class SlackNotificationChannel(NotificationChannel):
                 },
                 {
                     "type": "section",
-                    "fields": [
-                        {"type": "mrkdwn", "text": f"*Contact:*\n{contact_name}"},
-                        {"type": "mrkdwn", "text": f"*Company:*\n{company_name}"},
-                        {"type": "mrkdwn", "text": f"*Profile:*\n<{profile_url}|View on LinkedIn>"},
-                    ],
+                    "fields": fields,
                 },
                 {
                     "type": "context",

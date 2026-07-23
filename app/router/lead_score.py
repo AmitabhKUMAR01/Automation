@@ -29,12 +29,13 @@ def trigger_lead_scoring(
     background_tasks: BackgroundTasks,
     client_uuid: Optional[str] = Query(None, description="Score a single client by UUID"),
     force: bool = Query(False, description="Re-score already scored audits"),
+    limit: Optional[int] = Query(None, description="Max audits to score in batch (default: 10)"),
     db: Session = Depends(get_db),
 ):
     """
     Trigger lead qualification scoring (+ sales pitch generation) as a
     background task. If client_uuid is provided, scores only that client's
-    latest completed audit; otherwise scores all unscored completed audits.
+    latest completed audit; otherwise scores unscored completed audits up to limit.
     """
     try:
         if client_uuid:
@@ -89,7 +90,7 @@ def trigger_lead_scoring(
             )
 
         else:
-            # Batch: score all unscored completed audits
+            # Batch: score unscored completed audits up to limit
             if force:
                 # Reset all is_scored flags
                 db.query(WebsiteAudit).filter(
@@ -106,14 +107,15 @@ def trigger_lead_scoring(
             def _run_all():
                 task_db = SessionLocal()
                 try:
-                    score_and_pitch_for_all(task_db, force=False)
+                    score_and_pitch_for_all(task_db, force=False, limit=limit)
                 finally:
                     task_db.close()
 
             background_tasks.add_task(_run_all)
+            batch_limit = limit or 10
             return success(
-                {"audits_queued": pending, "force": force},
-                f"Lead scoring triggered for {pending} unscored audit(s)",
+                {"audits_queued": pending, "batch_limit": batch_limit, "force": force},
+                f"Lead scoring triggered for up to {batch_limit} unscored audit(s) (out of {pending} total pending)",
             )
 
     except Exception as exc:

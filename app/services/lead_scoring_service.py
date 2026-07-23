@@ -312,10 +312,22 @@ def score_and_pitch_for_audit(audit_id: int, db: Session) -> Optional[dict]:
     }
 
 
-def score_and_pitch_for_all(db: Session, force: bool = False) -> dict:
+def score_and_pitch_for_all(db: Session, force: bool = False, limit: int | None = None) -> dict:
+    import os
+    if limit is None:
+        try:
+            limit = int(os.getenv("LEAD_SCORE_BATCH_LIMIT", "10"))
+        except ValueError:
+            limit = 10
+
     query = db.query(WebsiteAudit).filter(WebsiteAudit.status == "completed")
     if not force:
-        query = query.filter(WebsiteAudit.is_scored == False)
+        query = query.filter(WebsiteAudit.is_scored == False)  # noqa: E712
+
+    query = query.order_by(WebsiteAudit.created_at.asc())
+
+    if limit and limit > 0:
+        query = query.limit(limit)
 
     audits = query.all()
     total = len(audits)
@@ -324,12 +336,11 @@ def score_and_pitch_for_all(db: Session, force: bool = False) -> dict:
         logger.info("[LEAD_SCORE] No unscored audits found.")
         return {"total": 0, "scored": 0, "failed": 0}
 
-    logger.info(f"[LEAD_SCORE] Batch scoring {total} audit(s)...")
+    logger.info(f"[LEAD_SCORE] Batch scoring {total} audit(s) (limit={limit})...")
 
     scored = 0
     failed = 0
     import time
-    import os
     batch_delay = float(os.getenv("BATCH_SCORING_DELAY_SEC", "4.0"))
 
     for index, audit in enumerate(audits):

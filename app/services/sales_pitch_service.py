@@ -54,10 +54,13 @@ def _first_name(full_name: str | None) -> str:
 
 def _should_retry(exception: Exception) -> bool:
     msg = str(exception).lower()
-    transient = ["429", "resource_exhausted", "quota", "rate limit", "503", "unavailable", "timeout"]
+    transient = [
+        "429", "resource_exhausted", "quota", "rate limit", "ratelimit",
+        "tpm", "rpm", "503", "overloaded", "unavailable", "timeout", "too many requests"
+    ]
     is_transient = any(ind in msg for ind in transient)
     if is_transient:
-        logger.info(f"[PITCH] ⚠️  Transient error ({exception}). Retrying...")
+        logger.warning(f"[PITCH] ⚠️  Transient LLM rate-limit or API error ({exception}). Retrying with backoff...")
     return is_transient
 
 
@@ -155,8 +158,8 @@ def _rule_based_linkedin_pitch(
 # ── LLM pitch ─────────────────────────────────────────────────────────────────
 
 @retry(
-    stop=stop_after_attempt(4),
-    wait=wait_exponential(multiplier=2, min=4, max=20),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=2, min=3, max=30),
     retry=retry_if_exception(_should_retry),
     reraise=True,
 )
@@ -235,16 +238,33 @@ def _llm_pitch(
     }
 
 
-# ── Grade gate ────────────────────────────────────────────────────────────────
+# ── Grade gate & Provider helpers ──────────────────────────────────────────────
 
 _GRADE_ORDER = ["F", "D", "C", "B", "A"]
 
 
+def _has_provider_key(provider: str) -> bool:
+    provider = provider.strip().lower()
+    if provider == "gemini":
+        return bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+    elif provider == "groq":
+        return bool(os.getenv("GROQ_API_KEY"))
+    elif provider == "openai":
+        return bool(os.getenv("OPENAI_API_KEY"))
+    elif provider == "claude":
+        return bool(os.getenv("ANTHROPIC_API_KEY"))
+    return False
+
+
 def _grade_qualifies(grade: str, min_grade: str) -> bool:
+    min_g = min_grade.upper()
+    if min_g in ("ALL", "*"):
+        return True
     try:
-        return _GRADE_ORDER.index(grade.upper()) <= _GRADE_ORDER.index(min_grade.upper())
+        # min_grade="A" or "ALL" qualifies all grades (F, D, C, B, A)
+        return _GRADE_ORDER.index(grade.upper()) <= _GRADE_ORDER.index(min_g)
     except ValueError:
-        return False
+        return True
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -263,11 +283,12 @@ def generate_sales_pitch(
     Channel priority:
       1. linkedin_contact provided  → LinkedIn DM (personalised to the contact)
       2. contact_email provided     → Cold email pitch
-      3. Neither                    → Generic rule-based email addressed to "the team"
+      3. Neither                    → Generic email addressed to "the team"
 
-    LLM is only triggered when:
-      - A valid API key exists for the selected provider, AND
-      - The lead grade is at or below PITCH_LLM_MIN_GRADE (default: C)
+    LLM execution strategy:
+      - Checks candidate LLM providers (primary provider first, followed by fallbacks with active keys).
+      - On transient failures or rate limits (429), retries with backoff, then attempts fallback LLM providers.
+      - Falls back to rule_engine only as a last resort when all LLM providers fail or have no keys.
     """
     from app.config.database import SessionLocal
     from app.models.profile_setting import ProfileSetting
@@ -317,19 +338,9 @@ def generate_sales_pitch(
             "pitch_channel": "linkedin" if linkedin_contact else ("email" if contact_email else "generic"),
         }
 
-    provider   = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
-    min_grade  = os.getenv("PITCH_LLM_MIN_GRADE", "C").strip().upper()
-    lead_grade = score_data.get("grade", "A")
-
-    has_key = False
-    if provider == "gemini":
-        has_key = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
-    elif provider == "openai":
-        has_key = bool(os.getenv("OPENAI_API_KEY"))
-    elif provider == "claude":
-        has_key = bool(os.getenv("ANTHROPIC_API_KEY"))
-    elif provider == "groq":
-        has_key = bool(os.getenv("GROQ_API_KEY"))
+    primary_provider = os.getenv("LLM_PROVIDER", "groq").strip().lower()
+    min_grade        = os.getenv("PITCH_LLM_MIN_GRADE", "A").strip().upper()
+    lead_grade       = score_data.get("grade", "A")
 
     qualifies = _grade_qualifies(lead_grade, min_grade)
 
@@ -343,24 +354,33 @@ def generate_sales_pitch(
 
     if not qualifies:
         logger.info(
-            f"[PITCH] ℹ️  Grade {lead_grade} above threshold {min_grade} — "
+            f"[PITCH] ℹ️  Grade {lead_grade} does not qualify for LLM (threshold {min_grade}) — "
             f"rule-based {channel} pitch."
         )
         if channel == "linkedin":
             return _rule_based_linkedin_pitch(client, linkedin_contact, score_data)
         return _rule_based_pitch(client, score_data, contact_email, sender_name=sender_name)
 
-    if has_key:
+    # Build ordered list of candidate LLM providers: primary provider first, followed by fallbacks
+    candidate_providers = [primary_provider]
+    for p in ["groq", "gemini", "openai", "claude"]:
+        if p != primary_provider and _has_provider_key(p):
+            candidate_providers.append(p)
+
+    for prov in candidate_providers:
+        if not _has_provider_key(prov):
+            continue
         try:
             return _llm_pitch(
-                client, audit, score_data, provider,
+                client, audit, score_data, prov,
                 channel=channel,
                 contact=linkedin_contact,
                 contact_email=contact_email,
             )
         except Exception as exc:
-            logger.info(f"[PITCH] ⚠️  LLM ({provider}) failed ({exc}), falling back to rule engine.")
+            logger.warning(f"[PITCH] ⚠️  LLM provider '{prov}' failed ({exc}). Retrying with next available provider if any...")
 
+    logger.warning(f"[PITCH] ⚠️  All LLM providers failed or unconfigured — falling back to rule-based {channel} pitch.")
     if channel == "linkedin":
         return _rule_based_linkedin_pitch(client, linkedin_contact, score_data)
     return _rule_based_pitch(client, score_data, contact_email, sender_name=sender_name)

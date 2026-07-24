@@ -4,10 +4,12 @@ from app.utils.logger import logger
 from app.services.channels.base import NotificationChannel
 from app.services.channels.email_channel import EmailNotificationChannel
 from app.services.channels.slack_channel import SlackNotificationChannel
+from app.services.channels.telegram_channel import TelegramNotificationChannel
 
 _CHANNEL_REGISTRY: dict[str, type[NotificationChannel]] = {
-    "email": EmailNotificationChannel,
-    "slack": SlackNotificationChannel,
+    "email"   : EmailNotificationChannel,
+    "slack"   : SlackNotificationChannel,
+    "telegram": TelegramNotificationChannel,
 }
 
 _channel_instance: NotificationChannel | None = None

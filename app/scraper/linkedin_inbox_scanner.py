@@ -10,6 +10,7 @@ open each thread individually.
 from __future__ import annotations
 from app.utils.logger import logger
 import time
+import random
 import re
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 from app.scraper.linkedin_finder import (
@@ -223,7 +224,7 @@ def scan_inbox(
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
             headless=HEADLESS,
-            slow_mo=400,
+            slow_mo=random.randint(300, 550),
             args=["--disable-blink-features=AutomationControlled"],
         )
         context = browser.new_context(

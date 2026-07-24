@@ -224,7 +224,7 @@ def check_reply_for_contact(
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
             headless=HEADLESS,
-            slow_mo=500,
+            slow_mo=random.randint(400, 650),
             args=["--disable-blink-features=AutomationControlled"],
         )
         context = browser.new_context(

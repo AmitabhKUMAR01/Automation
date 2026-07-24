@@ -249,7 +249,7 @@ def send_linkedin_dm(contact: LinkedinContact | LinkedinSearchContact, message: 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
             headless=HEADLESS,
-            slow_mo=600,
+            slow_mo=random.randint(450, 750),
             args=["--disable-blink-features=AutomationControlled"],
         )
         context = browser.new_context(

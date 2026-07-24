@@ -72,7 +72,7 @@ def send_connection_requests(
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
             headless=HEADLESS,
-            slow_mo=800,
+            slow_mo=random.randint(600, 1000),
             args=["--disable-blink-features=AutomationControlled"],
         )
         context = browser.new_context(
@@ -196,7 +196,7 @@ def send_daily_global_connections(
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
             headless=HEADLESS,
-            slow_mo=800,
+            slow_mo=random.randint(600, 1000),
             args=["--disable-blink-features=AutomationControlled"],
         )
         context = browser.new_context(
@@ -380,6 +380,7 @@ def check_recent_connections(db: Session, max_scroll: int = 3, profile_id: int =
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
             headless=HEADLESS,
+            slow_mo=random.randint(600, 1000),
             args=["--disable-blink-features=AutomationControlled"],
         )
         context = browser.new_context(

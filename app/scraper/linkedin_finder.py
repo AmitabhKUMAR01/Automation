@@ -249,7 +249,7 @@ def find_linkedin_playwright(company: str, business_client_id: int, db: Session,
         ## launch browser
         browser = pw.chromium.launch(
             headless=HEADLESS,
-            slow_mo=800,
+            slow_mo=random.randint(600, 1000),
             args=["--disable-blink-features=AutomationControlled"],
         )
 

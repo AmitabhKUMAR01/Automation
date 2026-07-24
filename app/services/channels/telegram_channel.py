@@ -129,11 +129,11 @@ class TelegramNotificationChannel(NotificationChannel):
         _post(
             {
                 **_build_base("reply_received"),
-                "event": "reply_received",
-                "contact_name": contact_name,
-                "company_name": company_name,
-                "reply_snippet": snippet,
-                "message": (
+                "event"         : "reply_received",
+                "contact_name"  : contact_name,
+                "contact_company": company_name,
+                "reply_snippet" : snippet,
+                "message"       : (
                     f"💬 Reply from *{contact_name}* ({company_name}):\n{snippet}"
                 ),
             }

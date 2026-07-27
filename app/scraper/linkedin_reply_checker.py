@@ -108,24 +108,26 @@ def _read_thread_messages(page) -> list[dict]:
         logger.info("[REPLY CHECKER] ⚠️  Thread container not found.")
         return messages
 
-    # ── Scroll up slightly to load recent messages ────────────────────────────
+    # ── Scroll to bottom to load the most recent messages ────────────────────
     try:
         page.evaluate("document.querySelector('div.msg-s-message-list-container, ul.msg-s-message-list')?.scrollTo(0, 99999)")
         _rand_delay(1, 1.5)
     except Exception:
         pass
 
-    # ── Extract each message bubble ───────────────────────────────────────────
+    # ── Extract each message item ─────────────────────────────────────────────
+    # Use ONLY <li> selectors — the old `div[class*='msg-s-event-listitem']`
+    # also matched child bubble <div>s inside each <li>, producing duplicate
+    # entries and causing the real last message to be misidentified.
     msg_items = page.locator(
         "li.msg-s-message-list__event, "
-        "li[class*='msg-s-event-listitem'], "
-        "div[class*='msg-s-event-listitem']"
+        "li[class*='msg-s-event-listitem']"
     )
 
     count = msg_items.count()
     logger.info(f"[REPLY CHECKER] 📩  Found {count} message element(s) in thread")
 
-    # ── Debug: dump first few items' classes to help tune selectors ──────────
+    # ── Debug: dump first 3 items' classes ───────────────────────────────────
     for dbg_i in range(min(3, count)):
         try:
             dbg_cls = msg_items.nth(dbg_i).get_attribute("class") or ""
@@ -138,12 +140,13 @@ def _read_thread_messages(page) -> list[dict]:
         try:
             classes = item.get_attribute("class") or ""
 
+            # ── Step 1: CSS class signals ─────────────────────────────────
             if "other" in classes:
                 is_self = False
             elif "sent-by-me" in classes or "outgoing" in classes:
                 is_self = True
             else:
-                # Check aria-label on any nested time/status element
+                # ── Step 2: aria-label on nested status elements ──────────
                 aria_els = item.locator(
                     "[aria-label*='You sent'], "
                     "[aria-label*='Sent by you'], "
@@ -152,19 +155,41 @@ def _read_thread_messages(page) -> list[dict]:
                 if aria_els.count() > 0:
                     is_self = True
                 else:
-                    # Check if the sender name element exists and matches the
-                    # contact pattern (incoming messages show sender name)
+                    # ── Step 3: visible sender-name label ─────────────────
+                    # LinkedIn shows the contact's name on *their* messages,
+                    # never on yours — so presence means incoming.
                     sender_el = item.locator(
                         ".msg-s-event-listitem__sender-name, "
                         "[class*='sender-name'], "
                         "[class*='actor-name']"
                     )
                     if sender_el.count() > 0:
-                        is_self = False  # incoming messages have a visible sender label
+                        is_self = False
                     else:
-                        is_self = True   # no sender label → outgoing (default safe)
+                        # ── Step 4: viewport-position heuristic ───────────
+                        # LinkedIn right-aligns YOUR messages and left-aligns
+                        # theirs. Check which half of the viewport the centre
+                        # of this element falls in.
+                        try:
+                            is_right_aligned = item.evaluate(
+                                """el => {
+                                    const rect = el.getBoundingClientRect();
+                                    if (rect.width === 0) return null;
+                                    return (rect.left + rect.width / 2) > (window.innerWidth / 2);
+                                }"""
+                            )
+                            if is_right_aligned is True:
+                                is_self = True
+                            elif is_right_aligned is False:
+                                is_self = False
+                            else:
+                                # Zero-width → date separator or invisible elem, skip
+                                continue
+                        except Exception:
+                            # Cannot determine direction — skip to avoid wrong result
+                            continue
 
-            # Extract message body text
+            # ── Extract message body text ─────────────────────────────────
             body_el = item.locator(
                 "p.msg-s-event-listitem__body, "
                 "span.msg-s-event-listitem__body, "

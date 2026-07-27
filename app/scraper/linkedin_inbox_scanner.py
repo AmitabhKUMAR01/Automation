@@ -37,7 +37,7 @@ def _extract_slug_from_href(href: str) -> str | None:
     return None
 
 
-def _parse_conversation_cards(page, max_cards: int = 50) -> list[dict]:
+def _parse_conversation_cards(page, max_cards: int = 100) -> list[dict]:
     """
     Parse visible conversation cards from the LinkedIn messaging sidebar.
     Returns a list of dicts with conversation metadata.
@@ -68,6 +68,8 @@ def _parse_conversation_cards(page, max_cards: int = 50) -> list[dict]:
         return conversations
 
     count = min(cards.count(), max_cards)
+    if cards.count() > max_cards:
+        logger.info(f"[INBOX SCAN] ⚠️  {cards.count()} cards found but only parsing {max_cards} — increase max_cards if contacts are missed.")
     logger.info(f"[INBOX SCAN] 📋 Parsing {count} conversation card(s)…")
 
     for i in range(count):
@@ -296,7 +298,7 @@ def scan_inbox(
                     pass
 
             # 4. Parse conversation cards
-            conversations = _parse_conversation_cards(page)
+            conversations = _parse_conversation_cards(page, max_cards=100)
             result["conversations"] = conversations
             result["total_scanned"] = len(conversations)
             result["unread_conversations"] = [c for c in conversations if c["has_unread"]]

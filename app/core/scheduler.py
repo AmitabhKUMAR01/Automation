@@ -390,7 +390,7 @@ def schedule_jobs():
         id="periodic_pitch_reply_check",
         replace_existing=True,
     )
-    logger.info(f"[SCHEDULER] Pitch reply check job scheduled every {reply_interval_hours} hour(s).")
+    logger.info(f"[SCHEDULER] Pitch reply check job scheduled every {reply_interval_hours} minute(s).")
 
     _scheduler.start()
     return _scheduler

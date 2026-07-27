@@ -17,56 +17,182 @@ from sqlalchemy.orm import Session
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _open_conversation(page, profile_url: str, contact_name: str) -> bool:
-    # Navigate to profile
-    page.goto(profile_url, wait_until="domcontentloaded", timeout=30000)
+MESSAGING_URL = "https://www.linkedin.com/messaging/"
+
+
+def _open_conversation_via_inbox(page, contact_name: str) -> bool:
+    """
+    Navigate to the LinkedIn messaging inbox and open the conversation for
+    contact_name by clicking their conversation card directly.
+
+    This avoids visiting the contact's profile page, which would register
+    a visible profile view on their end.
+
+    Returns True if the thread was successfully opened.
+    """
+    logger.info(f"[REPLY CHECKER] 📬 Opening conversation via inbox (no profile visit) for: {contact_name!r}")
+    page.goto(MESSAGING_URL, wait_until="domcontentloaded", timeout=30000)
     _rand_delay(2, 3)
     _check_session(page)
 
-    # Extra settle — LinkedIn lazy-loads action buttons
+    # Wait for conversation list
+    try:
+        page.wait_for_selector(
+            "ul.msg-conversations-container__conversations-list, "
+            "li.msg-conversation-listitem",
+            timeout=10000,
+        )
+    except PlaywrightTimeout:
+        logger.info("[REPLY CHECKER] ⚠️  Messaging inbox did not load.")
+        return False
+
+    _rand_delay(1, 1.5)
+
+    contact_name_lower = contact_name.strip().lower()
+
+    import re as _re
+    def _strip_punct(s: str) -> str:
+        return _re.sub(r"[^\w\s]", "", s).strip()
+
+    contact_clean = _strip_punct(contact_name_lower)
+    first_token = contact_clean.split()[0] if contact_clean.split() else ""
+
+    found_card = None
+    matched_name = None
+
+    # Walk and scroll incrementally up to 15 times to handle virtual sidebar list
+    for scroll_step in range(15):
+        card_selectors = [
+            "li.msg-conversation-listitem",
+            "li[class*='msg-conversation-listitem']",
+        ]
+        cards = None
+        for sel in card_selectors:
+            loc = page.locator(sel)
+            if loc.count() > 0:
+                cards = loc
+                break
+
+        if not cards or cards.count() == 0:
+            # Maybe list is loading, scroll to trigger it
+            pass
+        else:
+            count = cards.count()
+            step_match = None
+            for i in range(count):
+                card = cards.nth(i)
+                try:
+                    name_el = card.locator(
+                        "h3.msg-conversation-card__title, "
+                        "h3[class*='msg-conversation-card__title'], "
+                        "[class*='msg-conversation-card__title']"
+                    ).first
+                    if name_el.count() == 0:
+                        continue
+                    raw = name_el.inner_text().strip()
+                    card_name = next((ln.strip() for ln in raw.splitlines() if ln.strip()), raw)
+                    card_name_lower = card_name.strip().lower()
+                    card_clean = _strip_punct(card_name_lower)
+
+                    # Match by containment or first-name for abbreviated names
+                    matched = (
+                        contact_name_lower in card_name_lower
+                        or card_name_lower in contact_name_lower
+                        or (contact_clean and (contact_clean in card_clean or card_clean in contact_clean))
+                        or (len(first_token) >= 4 and first_token in card_clean)
+                    )
+                    if matched:
+                        # Double check if last token of DB name is abbreviated
+                        tokens_orig = contact_name_lower.split()
+                        last_token = tokens_orig[-1] if tokens_orig else ""
+                        is_abbreviated = len(_strip_punct(last_token)) <= 1 or last_token.endswith(".")
+                        
+                        # If first token matched but it wasn't abbreviated, make sure it's a solid match
+                        if not (contact_name_lower in card_name_lower or card_name_lower in contact_name_lower or (contact_clean and (contact_clean in card_clean or card_clean in contact_clean))):
+                            if not is_abbreviated:
+                                continue # Skip false positives on first name only
+                        
+                        step_match = (card, card_name)
+                        break
+                except Exception:
+                    continue
+
+            if step_match:
+                found_card, matched_name = step_match
+                break
+
+        # Scroll down by a portion to load more cards
+        try:
+            page.evaluate("""
+                const container = document.querySelector(
+                    'ul.msg-conversations-container__conversations-list, '  +
+                    'div.msg-conversations-container__conversations-list, ' +
+                    'ul[class*="msg-conversations-container"]'
+                );
+                if (container) {
+                    container.scrollBy(0, 400);
+                } else {
+                    window.scrollBy(0, 400);
+                }
+            """)
+            _rand_delay(1.5, 2.0)
+        except Exception:
+            break
+
+    if found_card:
+        try:
+            found_card.click()
+            _rand_delay(2, 3)
+            logger.info(f"[REPLY CHECKER] ✅ Opened conversation card for {matched_name!r} (matched {contact_name!r})")
+            return "messaging" in page.url
+        except Exception as exc:
+            logger.info(f"[REPLY CHECKER] ⚠️  Failed to click matched card: {exc}")
+
+    logger.info(f"[REPLY CHECKER] ⚠️  Conversation for {contact_name!r} not found in inbox — falling back to profile visit.")
+    return False
+
+
+def _open_conversation_via_profile(page, profile_url: str, contact_name: str) -> bool:
+    """
+    Fallback: navigate to the contact's profile page and use the Message
+    button/link to open the thread. This DOES register a profile view.
+    Only used when the inbox approach fails.
+    """
+    logger.info(f"[REPLY CHECKER] 🔗 Fallback — visiting profile page for {contact_name!r}")
+    page.goto(profile_url, wait_until="domcontentloaded", timeout=30000)
+    _rand_delay(2, 3)
+    _check_session(page)
     page.wait_for_timeout(2000)
 
     first_name = contact_name.strip().split()[0]
 
-    # ── Strategy 1: extract compose URL from profile Message link ──────────────
-    compose_url = None
-    link_selectors = [
+    # Try compose URL link first
+    for sel in (
         "a[href*='/messaging/compose'][href*='recipient']",
         f"a[aria-label='Message {contact_name}'][href*='messaging']",
         f"a[aria-label*='Message'][aria-label*='{first_name}'][href*='messaging']",
         "a[href*='/messaging/compose']",
-    ]
-    for sel in link_selectors:
+    ):
         try:
             lnk = page.locator(sel).first
             if lnk.count() > 0:
                 href = lnk.get_attribute("href")
                 if href and "/messaging/" in href:
-                    compose_url = (
-                        href if href.startswith("http")
-                        else f"https://www.linkedin.com{href}"
-                    )
+                    compose_url = href if href.startswith("http") else f"https://www.linkedin.com{href}"
                     logger.info(f"[REPLY CHECKER] 🔗 Compose URL found via {sel!r}")
-                    break
+                    page.goto(compose_url, wait_until="domcontentloaded", timeout=30000)
+                    _rand_delay(2, 3)
+                    return True
         except Exception:
             continue
 
-    if compose_url:
-        page.goto(compose_url, wait_until="domcontentloaded", timeout=30000)
-        _rand_delay(2, 3)
-        logger.info(f"[REPLY CHECKER] 💬  Navigated to conversation via compose URL")
-        return True
-
-    # ── Strategy 2: click the generic Message button ───────────────────────────
-    btn_selectors = [
+    # Fallback: click Message button
+    for sel in (
         f"button[aria-label*='Message'][aria-label*='{first_name}']",
         "button[aria-label='Message']",
-        "button[aria-label*='Message']",
         "div.pvs-profile-actions button:has-text('Message')",
-        "div.ph5 button:has-text('Message')",
         "button:has-text('Message')",
-    ]
-    for sel in btn_selectors:
+    ):
         try:
             btn = page.locator(sel).first
             if btn.count() > 0 and btn.is_visible():
@@ -74,7 +200,6 @@ def _open_conversation(page, profile_url: str, contact_name: str) -> bool:
                 _rand_delay(0.4, 0.8)
                 btn.click(force=True)
                 _rand_delay(2, 3)
-                logger.info(f"[REPLY CHECKER] 💬  Clicked Message button via {sel!r}")
                 return "linkedin.com/messaging" in page.url
         except Exception:
             continue
@@ -229,17 +354,13 @@ def check_reply_for_contact(
 ) -> dict:
     result = {"replied": False, "reply_text": None, "checked": True}
 
-    if not profile_url:
-        logger.info(f"[REPLY CHECKER] ⚠️  No profile_url — skipping {contact_name}")
-        return result
-
     logger.info(f"\n[REPLY CHECKER] 🔍 Checking replies for: {contact_name} ({profile_url})")
 
     profile = db.query(ProfileSetting).filter(ProfileSetting.id == profile_id).first()
     if not profile or not profile.session_state:
         logger.info(f"[REPLY CHECKER] Profile {profile_id} not found or missing session state.")
         return result
-    
+
     try:
         session_dict = json.loads(profile.session_state)
     except json.JSONDecodeError:
@@ -263,25 +384,28 @@ def check_reply_for_contact(
         page = context.new_page()
 
         try:
-            # 1. Verify session
-            page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=30000)
-            _rand_delay(1.5, 2.5)
-            _check_session(page)
+            # 1. Open the conversation thread via inbox (no profile view)
+            #    Falls back to profile visit only if the contact isn't visible in the inbox.
+            opened = _open_conversation_via_inbox(page, contact_name)
+            if not opened:
+                logger.info(
+                    f"[REPLY CHECKER] ℹ️  Not found in inbox — falling back to profile visit for {contact_name}"
+                )
+                if profile_url:
+                    opened = _open_conversation_via_profile(page, profile_url, contact_name)
 
-            # 2. Open the conversation thread
-            opened = _open_conversation(page, profile_url, contact_name)
             if not opened:
                 logger.info(f"[REPLY CHECKER] ⚠️  Could not open thread for {contact_name} — skipping.")
                 return result
 
-            # 3. Read messages
+            # 2. Read messages
             messages = _read_thread_messages(page)
 
             if not messages:
                 logger.info(f"[REPLY CHECKER] ℹ️   No messages found in thread (or couldn't parse).")
                 return result
 
-            # 4. Check: is the LAST message from the contact (not from us)?
+            # 3. Check: is the LAST message from the contact (not from us)?
             last_msg = messages[-1]
             if not last_msg["is_self"]:
                 result["replied"]    = True

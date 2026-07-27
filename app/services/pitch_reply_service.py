@@ -162,15 +162,40 @@ def _run_inbox_scan_phase(
         if contact_slug and contact_slug in unread_slugs:
             matched = True
 
-        # Match by name (fallback) — use partial containment to handle
-        # inbox display suffixes like "(AS)", "• 3rd+", truncated names, etc.
+        # Match by name (fallback) — multi-tier to handle abbreviations and suffixes
         if not matched and hasattr(contact, "name") and contact.name:
             contact_name_lower = contact.name.strip().lower()
+
+            import re as _re
+            def _strip_punct(s: str) -> str:
+                return _re.sub(r"[^\w\s]", "", s).strip()
+
+            contact_clean = _strip_punct(contact_name_lower)
+
             for inbox_name in unread_names:
-                if (
-                    contact_name_lower in inbox_name          # DB name contained in inbox name
-                    or inbox_name in contact_name_lower       # inbox name contained in DB name
+                inbox_clean = _strip_punct(inbox_name)
+
+                # Tier 1: direct containment (original logic)
+                if contact_name_lower in inbox_name or inbox_name in contact_name_lower:
+                    matched = True
+                    break
+
+                # Tier 2: punctuation-stripped containment
+                # "Aravind S." -> "aravind s" which IS in "aravind subramaniyan as"
+                if contact_clean and (
+                    contact_clean in inbox_clean or inbox_clean in contact_clean
                 ):
+                    matched = True
+                    break
+
+                # Tier 3: first-name match for abbreviated DB names like "Aravind S."
+                # Guard: first name >= 4 chars, last token looks abbreviated (1 letter or ends with ".")
+                tokens_clean = contact_clean.split()
+                first_token = tokens_clean[0] if tokens_clean else ""
+                tokens_orig = contact_name_lower.split()
+                last_token = tokens_orig[-1] if tokens_orig else ""
+                is_abbreviated = len(_strip_punct(last_token)) <= 1 or last_token.endswith(".")
+                if len(first_token) >= 4 and is_abbreviated and first_token in inbox_clean:
                     matched = True
                     break
 

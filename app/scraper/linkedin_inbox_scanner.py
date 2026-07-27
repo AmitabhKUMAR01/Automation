@@ -123,6 +123,9 @@ def _parse_conversation_cards(page, max_cards: int = 50) -> list[dict]:
                     pass
 
             # ── Extract contact name ──────────────────────────────────────────
+            # LinkedIn's card h3 often contains newline-separated content:
+            # e.g. "Aravind Subramaniyan(AS)\nJul 24\nJul 24"
+            # We take only the first non-empty line to strip out date stamps.
             name_selectors = [
                 "h3.msg-conversation-card__title",
                 "h3[class*='msg-conversation-card__title']",
@@ -133,7 +136,13 @@ def _parse_conversation_cards(page, max_cards: int = 50) -> list[dict]:
                 try:
                     name_el = card.locator(nsel).first
                     if name_el.count() > 0:
-                        entry["name"] = name_el.inner_text().strip()
+                        raw = name_el.inner_text().strip()
+                        # Take only the first non-empty line (strips date/time suffixes)
+                        first_line = next(
+                            (ln.strip() for ln in raw.splitlines() if ln.strip()),
+                            raw,
+                        )
+                        entry["name"] = first_line
                         break
                 except Exception:
                     continue

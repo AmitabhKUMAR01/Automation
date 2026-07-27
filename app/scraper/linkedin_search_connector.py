@@ -277,6 +277,30 @@ def _send_connection_from_button(page, btn) -> bool:
             # No modal + no error = directly sent
             return True
 
+        # ── Detect wrong dialog type (messaging / DM dialog) ──────────────────
+        # On /mynetwork/grow/, clicking Connect can sometimes open a LinkedIn
+        # messaging compose dialog instead of the invite modal. That dialog has
+        # a disabled <button>Send</button> (the message send button) which is
+        # outside the viewport and cannot be clicked. Detect it early and bail.
+        dialog = page.locator("div[role='dialog']").first
+        if dialog.count() > 0:
+            dialog_text = (dialog.inner_text() or "").lower()
+            is_invite_modal = (
+                "send without a note" in dialog_text
+                or "add a note" in dialog_text
+                or "connect" in dialog_text
+            )
+            is_messaging_dialog = (
+                "msg-form" in (dialog.get_attribute("class") or "").lower()
+                or dialog.locator("div.msg-form__contenteditable, div[role='textbox'][aria-label*='message']").count() > 0
+                or (not is_invite_modal and dialog.locator("button.msg-form__send-button").count() > 0)
+            )
+            if is_messaging_dialog:
+                logger.debug("[SEARCH CONNECTOR] Messaging dialog detected instead of invite modal — dismissing")
+                page.keyboard.press("Escape")
+                _rand_delay(0.5, 1)
+                return False
+
         # Click 'Send without a note'
         send_btn = page.locator(
             "button[aria-label='Send without a note'], "
@@ -291,11 +315,23 @@ def _send_connection_from_button(page, btn) -> bool:
                 raise LinkedInWeeklyLimitError("Weekly invitation limit reached")
             return True
 
-        # Fallback: click the generic 'Send' button inside the dialog
-        dialog = page.locator("div[role='dialog']").first
+        # Fallback: click the generic 'Send' button inside the dialog.
+        # Use scroll_into_view_if_needed + force=True so it works even if the
+        # button renders partially off-screen inside a tall modal.
         if dialog.count() > 0:
             send_fallback = dialog.locator("button:has-text('Send')").first
             if send_fallback.count() > 0:
+                # Skip disabled buttons (e.g. the message-compose Send button)
+                is_disabled = send_fallback.get_attribute("disabled") is not None
+                if is_disabled:
+                    logger.debug("[SEARCH CONNECTOR] Fallback Send button is disabled — dismissing dialog")
+                    page.keyboard.press("Escape")
+                    _rand_delay(0.5, 1)
+                    return False
+                try:
+                    send_fallback.scroll_into_view_if_needed()
+                except Exception:
+                    pass
                 send_fallback.click(force=True)
                 _rand_delay(1.5, 2)
 

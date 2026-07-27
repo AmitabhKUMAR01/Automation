@@ -162,11 +162,17 @@ def _run_inbox_scan_phase(
         if contact_slug and contact_slug in unread_slugs:
             matched = True
 
-        # Match by name (fallback)
+        # Match by name (fallback) — use partial containment to handle
+        # inbox display suffixes like "(AS)", "• 3rd+", truncated names, etc.
         if not matched and hasattr(contact, "name") and contact.name:
             contact_name_lower = contact.name.strip().lower()
-            if contact_name_lower in unread_names:
-                matched = True
+            for inbox_name in unread_names:
+                if (
+                    contact_name_lower in inbox_name          # DB name contained in inbox name
+                    or inbox_name in contact_name_lower       # inbox name contained in DB name
+                ):
+                    matched = True
+                    break
 
         if matched:
             shortlist.append(pitch)

@@ -386,7 +386,7 @@ def schedule_jobs():
     _scheduler.add_job(
         make_tracked_job(scheduled_pitch_reply_check, job_id="periodic_pitch_reply_check", job_name="Pitch Reply Check", max_retries=1, retry_delay_sec=linkedin_retry_delay),
         "interval",
-        hours=reply_interval_hours,
+        minutes=reply_interval_hours,
         id="periodic_pitch_reply_check",
         replace_existing=True,
     )

@@ -303,6 +303,7 @@ def schedule_jobs():
         minute=export_minute,
         id="daily_sheet_export",
         replace_existing=True,
+        jitter=120,
     )
 
     # ---- Website Audit Job ----
@@ -315,6 +316,7 @@ def schedule_jobs():
         minute=audit_minute,
         id="daily_website_audit",
         replace_existing=True,
+        jitter=120,
     )
     logger.info(f"[SCHEDULER] Website audit job scheduled at {audit_hour:02d}:{audit_minute:02d} daily.")
 
@@ -328,6 +330,7 @@ def schedule_jobs():
         minute=_linkedin_search_minute,
         id="daily_linkedin_search",
         replace_existing=True,
+        jitter=300,
     )
     logger.info(f"[SCHEDULER] LinkedIn search+connect job scheduled at {_linkedin_search_hour:02d}:{_linkedin_search_minute:02d} daily.")
 
@@ -341,6 +344,7 @@ def schedule_jobs():
         minute=score_minute,
         id="daily_lead_scoring",
         replace_existing=True,
+        jitter=120,
     )
     logger.info(f"[SCHEDULER] Lead scoring job scheduled at {score_hour:02d}:{score_minute:02d} daily.")
 
@@ -365,6 +369,7 @@ def schedule_jobs():
         hours=acceptance_interval_hours,
         id="linkedin_acceptance_check",
         replace_existing=True,
+        jitter=300,
     )
     logger.info(f"[SCHEDULER] LinkedIn acceptance check job scheduled every {acceptance_interval_hours} hour(s).")
 
@@ -378,6 +383,7 @@ def schedule_jobs():
         minute=delivery_minute,
         id="daily_pitch_delivery",
         replace_existing=True,
+        jitter=120,
     )
     logger.info(f"[SCHEDULER] Pitch delivery job scheduled at {delivery_hour:02d}:{delivery_minute:02d} daily.")
 
@@ -389,6 +395,7 @@ def schedule_jobs():
         minutes=reply_interval_hours,
         id="periodic_pitch_reply_check",
         replace_existing=True,
+        jitter=45,
     )
     logger.info(f"[SCHEDULER] Pitch reply check job scheduled every {reply_interval_hours} minute(s).")
 

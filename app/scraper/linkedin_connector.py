@@ -484,7 +484,7 @@ def check_recent_connections(db: Session, max_scroll: int = 3, profile_id: int =
                             client=None,
                             audit=None,
                             score_data=None,
-                            linkedin_contact=None,
+                            linkedin_contact=contact,   # ← use contact name in greeting
                             profile_id=profile_id,
                         )
                         db.add(SalesPitch(

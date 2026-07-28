@@ -5,14 +5,16 @@ import time
 import re
 from typing import Optional
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
-
 from app.models.business_client import Business_Client
 from app.models.linkedin_contact import LinkedinContact
+from app.models.linkedin_search_contact import LinkedinSearchContact
 from app.models.website_audit import WebsiteAudit
 from app.core.prompts import SYSTEM_PROMPT, EMAIL_PROMPT_TEMPLATE, LINKEDIN_PROMPT_TEMPLATE
 from app.core.llm_provider import get_llm
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
+from app.config.database import SessionLocal
+from app.models.profile_setting import ProfileSetting
 
 
 # ── Contact ranking ───────────────────────────────────────────────────────────
@@ -277,22 +279,6 @@ def generate_sales_pitch(
     contact_email: str | None = None,
     profile_id: Optional[int] = None,
 ) -> dict:
-    """
-    Generate a sales pitch for a lead.
-
-    Channel priority:
-      1. linkedin_contact provided  → LinkedIn DM (personalised to the contact)
-      2. contact_email provided     → Cold email pitch
-      3. Neither                    → Generic email addressed to "the team"
-
-    LLM execution strategy:
-      - Checks candidate LLM providers (primary provider first, followed by fallbacks with active keys).
-      - On transient failures or rate limits (429), retries with backoff, then attempts fallback LLM providers.
-      - Falls back to rule_engine only as a last resort when all LLM providers fail or have no keys.
-    """
-    from app.config.database import SessionLocal
-    from app.models.profile_setting import ProfileSetting
-
     # Fetch sender name dynamically from the database using profile_id or the first active profile
     sender_name = "Team"
     db = SessionLocal()

@@ -366,7 +366,7 @@ def schedule_jobs():
     _scheduler.add_job(
         make_tracked_job(scheduled_linkedin_acceptance_check, job_id="linkedin_acceptance_check", job_name="LinkedIn Acceptance Check", max_retries=1, retry_delay_sec=linkedin_retry_delay),
         "interval",
-        hours=acceptance_interval_hours,
+        minutes=acceptance_interval_hours,
         id="linkedin_acceptance_check",
         replace_existing=True,
         jitter=300,

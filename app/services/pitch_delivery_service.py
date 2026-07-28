@@ -104,6 +104,11 @@ def deliver_pending_pitches(db: Session, profile_id: int = 1) -> dict:
         channel = pitch.pitch_channel
 
         # ── Email channel ──────────────────────────────────────────────────
+        if channel == "email" and os.getenv("EMAIL_DELIVERY_ENABLED", "false").lower() != "true":
+            logger.info(f"[DELIVERY] ⏭️  Pitch {pitch.id} — email delivery disabled (set EMAIL_DELIVERY_ENABLED=true to enable).")
+            summary["skipped"] += 1
+            continue
+
         if channel == "email":
             client = db.query(Business_Client).filter(
                 Business_Client.id == pitch.business_client_id

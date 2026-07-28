@@ -265,13 +265,35 @@ def _read_thread_messages(page) -> list[dict]:
         try:
             classes = item.get_attribute("class") or ""
 
-            # ── Step 1: CSS class signals ─────────────────────────────────
-            if "other" in classes:
+            # ── Check if this item is a real message event ────────────────
+            # Time headings and other separators do not have msg-s-event-listitem.
+            is_message = (
+                "msg-s-event-listitem" in classes
+                or item.locator("[class*='msg-s-event-listitem']").count() > 0
+            )
+            if not is_message:
+                continue
+
+            # ── Step 1: Check for 'other' sender indicator in descendants ──
+            # LinkedIn classes:
+            # - Incoming: msg-s-event-listitem--other
+            # - Outgoing (self): msg-s-event-listitem (no other suffix)
+            has_other = (
+                "other" in classes
+                or item.locator("[class*='--other'], [class*='other']").count() > 0
+            )
+            has_self = (
+                "sent-by-me" in classes
+                or "outgoing" in classes
+                or item.locator("[class*='--self'], [class*='self'], [class*='sent-by-me']").count() > 0
+            )
+
+            if has_other and not has_self:
                 is_self = False
-            elif "sent-by-me" in classes or "outgoing" in classes:
+            elif has_self and not has_other:
                 is_self = True
             else:
-                # ── Step 2: aria-label on nested status elements ──────────
+                # ── Step 2: fallback to aria-labels ───────────────────────
                 aria_els = item.locator(
                     "[aria-label*='You sent'], "
                     "[aria-label*='Sent by you'], "
@@ -280,9 +302,7 @@ def _read_thread_messages(page) -> list[dict]:
                 if aria_els.count() > 0:
                     is_self = True
                 else:
-                    # ── Step 3: visible sender-name label ─────────────────
-                    # LinkedIn shows the contact's name on *their* messages,
-                    # never on yours — so presence means incoming.
+                    # ── Step 3: fallback to sender-name presence ──────────
                     sender_el = item.locator(
                         ".msg-s-event-listitem__sender-name, "
                         "[class*='sender-name'], "
@@ -291,10 +311,7 @@ def _read_thread_messages(page) -> list[dict]:
                     if sender_el.count() > 0:
                         is_self = False
                     else:
-                        # ── Step 4: viewport-position heuristic ───────────
-                        # LinkedIn right-aligns YOUR messages and left-aligns
-                        # theirs. Check which half of the viewport the centre
-                        # of this element falls in.
+                        # ── Step 4: fallback to position-based heuristic ──
                         try:
                             is_right_aligned = item.evaluate(
                                 """el => {
@@ -308,10 +325,8 @@ def _read_thread_messages(page) -> list[dict]:
                             elif is_right_aligned is False:
                                 is_self = False
                             else:
-                                # Zero-width → date separator or invisible elem, skip
                                 continue
                         except Exception:
-                            # Cannot determine direction — skip to avoid wrong result
                             continue
 
             # ── Extract message body text ─────────────────────────────────

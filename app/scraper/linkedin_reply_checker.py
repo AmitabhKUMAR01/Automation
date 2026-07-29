@@ -274,60 +274,53 @@ def _read_thread_messages(page) -> list[dict]:
             if not is_message:
                 continue
 
-            # ── Step 1: Check for 'other' sender indicator in descendants ──
-            # LinkedIn classes:
-            # - Incoming: msg-s-event-listitem--other
-            # - Outgoing (self): msg-s-event-listitem (no other suffix)
-            has_other = (
-                "other" in classes
-                or item.locator("[class*='--other'], [class*='other']").count() > 0
-            )
-            has_self = (
-                "sent-by-me" in classes
-                or "outgoing" in classes
-                or item.locator("[class*='--self'], [class*='self'], [class*='sent-by-me']").count() > 0
-            )
+            # ── DOM-verified sender detection ─────────────────────────────
+            #
+            # Confirmed via live DOM inspection (2026-07-29):
+            #   INCOMING → inner div class contains "msg-s-event-listitem--other"
+            #   OUTGOING → inner div class does NOT contain "--other"
+            #
+            # LinkedIn uses flexbox alignment (not `left` offset) so
+            # getBoundingClientRect() returns the same values for both
+            # sent and received — the position heuristic is unreliable.
+            #
+            # There is NO positive CSS marker for outgoing messages.
+            # Absence of "--other" reliably means it was sent by us.
+            #
+            # Selector targets the inner child div specifically to avoid
+            # matching unrelated descendants (e.g. seen-receipts divs).
 
-            if has_other and not has_self:
+            has_other = item.locator(
+                "div.msg-s-event-listitem--other, "
+                "div[class*='msg-s-event-listitem--other']"
+            ).count() > 0
+
+            if has_other:
+                # Incoming message from the contact
                 is_self = False
-            elif has_self and not has_other:
-                is_self = True
             else:
-                # ── Step 2: fallback to aria-labels ───────────────────────
-                aria_els = item.locator(
+                # No "--other" marker → outgoing message sent by us.
+                # Secondary checks below override only if they fire positively
+                # (e.g. aria-labels added by future LinkedIn updates).
+                is_self = True
+
+                # Optional: aria-label double-check (future-proofing)
+                aria_sent = item.locator(
                     "[aria-label*='You sent'], "
                     "[aria-label*='Sent by you'], "
                     "[aria-label*='you sent']"
                 )
-                if aria_els.count() > 0:
-                    is_self = True
-                else:
-                    # ── Step 3: fallback to sender-name presence ──────────
-                    sender_el = item.locator(
-                        ".msg-s-event-listitem__sender-name, "
-                        "[class*='sender-name'], "
-                        "[class*='actor-name']"
-                    )
-                    if sender_el.count() > 0:
-                        is_self = False
-                    else:
-                        # ── Step 4: fallback to position-based heuristic ──
-                        try:
-                            is_right_aligned = item.evaluate(
-                                """el => {
-                                    const rect = el.getBoundingClientRect();
-                                    if (rect.width === 0) return null;
-                                    return (rect.left + rect.width / 2) > (window.innerWidth / 2);
-                                }"""
-                            )
-                            if is_right_aligned is True:
-                                is_self = True
-                            elif is_right_aligned is False:
-                                is_self = False
-                            else:
-                                continue
-                        except Exception:
-                            continue
+                # If aria says "You sent" it confirms is_self=True (already set).
+                # If a sender-name element exists, it suggests incoming — flip.
+                sender_el = item.locator(
+                    ".msg-s-event-listitem__sender-name, "
+                    "[class*='sender-name'], "
+                    "[class*='actor-name']"
+                )
+                if sender_el.count() > 0 and aria_sent.count() == 0:
+                    # Sender name present but no "You sent" aria → likely incoming
+                    # that LinkedIn didn't mark with --other (rare edge case)
+                    is_self = False
 
             # ── Extract message body text ─────────────────────────────────
             body_el = item.locator(

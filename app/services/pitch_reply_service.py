@@ -18,6 +18,123 @@ from app.scraper.linkedin_inbox_scanner import scan_inbox
 from app.scraper.linkedin_finder import LinkedInSessionExpiredError
 from app.services.notification_service import notify_reply_received
 from app.models.business_client import Business_Client
+from app.models.client_chat_message import ClientChatMessage
+from app.core.prompts import SUGGESTED_REPLY_PROMPT_TEMPLATE, SYSTEM_PROMPT
+from app.core.llm_provider import get_llm
+from app.services.sales_pitch_service import _has_provider_key
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
+
+
+def generate_suggested_reply(
+    contact_name: str,
+    company_name: str,
+    pitch_context: str,
+    messages: list[dict],
+) -> str | None:
+    """
+    Generate an LLM suggested follow-up response based on full chat history.
+    """
+    if not messages:
+        return None
+
+    # Format full chronological chat history
+    formatted_chat_lines = []
+    for msg in messages:
+        sender_label = "You" if msg.get("is_self") else (msg.get("sender") or "Them")
+        body = msg.get("body") or ""
+        formatted_chat_lines.append(f"{sender_label}: {body}")
+
+    chat_history_text = "\n".join(formatted_chat_lines)
+
+    primary_provider = os.getenv("LLM_PROVIDER", "groq").strip().lower()
+    candidate_providers = [primary_provider]
+    for p in ["groq", "gemini", "openai", "claude"]:
+        if p != primary_provider and _has_provider_key(p):
+            candidate_providers.append(p)
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human", SUGGESTED_REPLY_PROMPT_TEMPLATE),
+    ])
+    parser = JsonOutputParser()
+
+    invoke_vars = {
+        "contact_name": contact_name or "there",
+        "company_name": company_name or "your company",
+        "pitch_context": (pitch_context or "")[:500],
+        "chat_history_text": chat_history_text,
+    }
+
+    for prov in candidate_providers:
+        if not _has_provider_key(prov):
+            continue
+        try:
+            llm = get_llm(provider=prov)
+            chain = prompt | llm | parser
+            result = chain.invoke(invoke_vars)
+            suggested = result.get("suggested_reply")
+            if suggested:
+                return suggested
+        except Exception as exc:
+            logger.warning(f"[REPLY CHECK] ⚠️ LLM provider '{prov}' failed to generate suggested reply: {exc}")
+
+    return None
+
+
+def _sync_chat_history(
+    pitch: SalesPitch,
+    contact: object,
+    profile_id: int,
+    messages: list[dict],
+    suggested_reply: str | None,
+    telegram_chat_id: str | None,
+    db: Session,
+) -> None:
+    """
+    Persist thread messages into client_chat_messages table for this pitch & profile.
+    """
+    if not messages:
+        return
+
+    contact_id = getattr(pitch, "linkedin_contact_id", None)
+    search_contact_id = getattr(pitch, "linkedin_search_contact_id", None)
+
+    for idx, msg in enumerate(messages):
+        body = msg.get("body") or ""
+        sender = msg.get("sender") or ("You" if msg.get("is_self") else "Them")
+        is_self = bool(msg.get("is_self"))
+
+        # Check if message already recorded for this pitch/contact
+        existing = db.query(ClientChatMessage).filter(
+            ClientChatMessage.sales_pitch_id == pitch.id,
+            ClientChatMessage.sender == sender,
+            ClientChatMessage.message_body == body,
+        ).first()
+
+        if existing:
+            if suggested_reply and not existing.suggested_reply:
+                existing.suggested_reply = suggested_reply
+            if telegram_chat_id and not existing.telegram_chat_id:
+                existing.telegram_chat_id = telegram_chat_id
+        else:
+            is_last = (idx == len(messages) - 1)
+            record = ClientChatMessage(
+                profile_id=profile_id,
+                sales_pitch_id=pitch.id,
+                linkedin_contact_id=contact_id,
+                linkedin_search_contact_id=search_contact_id,
+                sender=sender,
+                message_body=body,
+                is_self=is_self,
+                suggested_reply=suggested_reply if is_last and not is_self else None,
+                telegram_chat_id=telegram_chat_id if is_last and not is_self else None,
+                status="received" if not is_self else "sent",
+            )
+            db.add(record)
+
+    db.commit()
+
 
 def _cfg() -> dict:
     return {
@@ -245,6 +362,8 @@ def _run_thread_check_phase(
                 profile_id   = profile_id,
             )
 
+            messages = result.get("chat_history") or []
+
             if result["replied"]:
                 _mark_replied(pitch, result["reply_text"] or "", db)
                 summary["replied"] += 1
@@ -258,13 +377,47 @@ def _run_thread_check_phase(
                         Business_Client.id == pitch.business_client_id
                     ).first()
                     company_name = client.name if client else ""
-                notify_reply_received(
-                    contact_name  = contact.name or "Unknown",
-                    company_name  = company_name,
-                    reply_snippet = result["reply_text"] or "",
+
+                # ── Generate LLM Suggested Reply using FULL Chat History ─────
+                suggested_reply = generate_suggested_reply(
+                    contact_name=contact.name or "Unknown",
+                    company_name=company_name,
+                    pitch_context=pitch.pitch_body or "",
+                    messages=messages,
                 )
+
+                # ── Send notification and capture Telegram chat_id ──────────
+                telegram_chat_id = notify_reply_received(
+                    contact_name    = contact.name or "Unknown",
+                    company_name    = company_name,
+                    reply_snippet   = result["reply_text"] or "",
+                    profile_id      = profile_id,
+                    suggested_reply = suggested_reply,
+                    sales_pitch_id  = pitch.id,
+                )
+
+                # ── Persist Chat History into client_chat_messages table ─────
+                _sync_chat_history(
+                    pitch=pitch,
+                    contact=contact,
+                    profile_id=profile_id,
+                    messages=messages,
+                    suggested_reply=suggested_reply,
+                    telegram_chat_id=telegram_chat_id,
+                    db=db,
+                )
+
             else:
                 _mark_checked_no_reply(pitch, db)
+                _sync_chat_history(
+                    pitch=pitch,
+                    contact=contact,
+                    profile_id=profile_id,
+                    messages=messages,
+                    suggested_reply=None,
+                    telegram_chat_id=None,
+                    db=db,
+                )
                 summary["no_reply"] += 1
                 logger.info(f"[REPLY CHECK] ℹ️   No reply yet — pitch {pitch.id} ({contact.name})")
 
@@ -283,6 +436,7 @@ def _run_thread_check_phase(
 
         # Polite delay between Playwright sessions
         time.sleep(cfg["delay_between"])
+
 
 
 # ── Core logic ─────────────────────────────────────────────────────────────────

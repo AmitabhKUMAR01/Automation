@@ -277,6 +277,19 @@ def get_sales_pitches(
         return error(f"Failed to fetch sales pitches: {exc}")
 
 
+from pydantic import BaseModel
+from app.models.client_chat_message import ClientChatMessage
+from app.services.pitch_reply_service import _resolve_contact
+from app.scraper.linkedin_dm_sender import send_linkedin_dm
+
+
+class WebhookReplyCallbackRequest(BaseModel):
+    chat_id: Optional[str] = None
+    pitch_id: Optional[int] = None
+    profile_id: Optional[int] = None
+    action: str  # "yes", "no", or custom text message
+
+
 # ---------------------------------------------------------------------------
 # GET /lead/pitches/replies
 # ---------------------------------------------------------------------------
@@ -315,6 +328,12 @@ def get_pitch_replies(
 
         items = []
         for sp, bc in rows:
+            chat_msgs = (
+                db.query(ClientChatMessage)
+                .filter(ClientChatMessage.sales_pitch_id == sp.id)
+                .order_by(ClientChatMessage.created_at.asc())
+                .all()
+            )
             items.append({
                 "pitch_id"       : sp.id,
                 "pitch_uuid"     : sp.uuid,
@@ -325,6 +344,7 @@ def get_pitch_replies(
                 "reply_text"     : sp.reply_text,
                 "replied_at"     : sp.replied_at,
                 "reply_checked_at": sp.reply_checked_at,
+                "chat_history"   : [jsonable_encoder(cm) for cm in chat_msgs],
                 # ── client ──
                 "client": {
                     "uuid"    : bc.uuid,
@@ -402,6 +422,125 @@ def trigger_reply_check(
 
 
 # ---------------------------------------------------------------------------
+# POST /lead/pitches/reply-callback
+# ---------------------------------------------------------------------------
+
+@router.post("/pitches/reply-callback")
+def handle_webhook_reply_callback(
+    payload: WebhookReplyCallbackRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Webhook callback endpoint to receive approval or user response from Telegram.
+    - If action is "yes", delivers the saved LLM suggested_reply.
+    - If action is "no", marks status as rejected.
+    - Otherwise, delivers the custom action text string to the client via LinkedIn DM.
+    """
+    try:
+        query = db.query(ClientChatMessage)
+        if payload.chat_id:
+            query = query.filter(ClientChatMessage.telegram_chat_id == payload.chat_id)
+        elif payload.pitch_id:
+            query = query.filter(ClientChatMessage.sales_pitch_id == payload.pitch_id)
+        else:
+            return error("Either chat_id or pitch_id must be provided", status_code=400)
+
+        chat_msg = query.order_by(ClientChatMessage.id.desc()).first()
+        if not chat_msg:
+            return error("Client chat message record not found", status_code=404)
+
+        pitch_id = payload.pitch_id or chat_msg.sales_pitch_id
+        pitch = db.query(SalesPitch).filter(SalesPitch.id == pitch_id).first()
+        if not pitch:
+            return error("Sales pitch record not found", status_code=404)
+
+        profile_id = payload.profile_id or chat_msg.profile_id or 1
+        contact, contact_type = _resolve_contact(pitch, db)
+        if not contact:
+            return error("Linked contact not found for this pitch", status_code=404)
+
+        action_str = payload.action.strip()
+        action_lower = action_str.lower()
+
+        if action_lower in ("no", "reject", "cancel"):
+            chat_msg.status = "rejected"
+            db.commit()
+            return success({"status": "rejected", "pitch_id": pitch_id}, "Reply action rejected — no DM sent.")
+
+        if action_lower == "yes":
+            text_to_send = chat_msg.suggested_reply or "Thank you for getting in touch! We'd be happy to discuss further."
+        else:
+            text_to_send = action_str
+
+        # Deliver DM via Playwright
+        sent_ok = send_linkedin_dm(contact=contact, message=text_to_send, db=db, profile_id=profile_id)
+
+        if sent_ok:
+            chat_msg.status = "approved" if action_lower == "yes" else "custom_sent"
+            chat_msg.sent_reply_text = text_to_send
+
+            # Add sent message entry to client_chat_messages
+            new_msg = ClientChatMessage(
+                profile_id=profile_id,
+                sales_pitch_id=pitch.id,
+                linkedin_contact_id=pitch.linkedin_contact_id,
+                linkedin_search_contact_id=pitch.linkedin_search_contact_id,
+                sender="You",
+                message_body=text_to_send,
+                is_self=True,
+                status="sent",
+            )
+            db.add(new_msg)
+            db.commit()
+
+            return success(
+                {
+                    "status": "delivered",
+                    "pitch_id": pitch_id,
+                    "profile_id": profile_id,
+                    "sent_text": text_to_send,
+                },
+                f"Reply successfully delivered to {getattr(contact, 'name', 'contact')}",
+            )
+        else:
+            chat_msg.status = "delivery_failed"
+            db.commit()
+            return error("Failed to send LinkedIn DM to contact. Check browser logs or session state.", status_code=500)
+
+    except Exception as exc:
+        return error(f"Failed to process webhook reply callback: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# GET /lead/pitches/{pitch_id}/chat-history
+# ---------------------------------------------------------------------------
+
+@router.get("/pitches/{pitch_id}/chat-history")
+def get_pitch_chat_history(
+    pitch_id: int,
+    db: Session = Depends(get_db),
+):
+    """Fetch complete structured conversation history for a specific sales pitch."""
+    try:
+        messages = (
+            db.query(ClientChatMessage)
+            .filter(ClientChatMessage.sales_pitch_id == pitch_id)
+            .order_by(ClientChatMessage.created_at.asc())
+            .all()
+        )
+        return success(
+            {
+                "pitch_id": pitch_id,
+                "total_messages": len(messages),
+                "messages": [jsonable_encoder(m) for m in messages],
+            },
+            "Chat history fetched successfully",
+        )
+    except Exception as exc:
+        return error(f"Failed to fetch chat history: {exc}")
+
+
+# ---------------------------------------------------------------------------
 # GET /lead/summary
 # ---------------------------------------------------------------------------
 
@@ -440,3 +579,4 @@ def get_lead_summary(db: Session = Depends(get_db)):
         )
     except Exception as exc:
         return error(f"Failed to fetch lead summary: {exc}")
+

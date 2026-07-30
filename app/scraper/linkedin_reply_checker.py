@@ -360,7 +360,7 @@ def check_reply_for_contact(
     delivered_at: datetime | None = None,
     profile_id: int = 1,
 ) -> dict:
-    result = {"replied": False, "reply_text": None, "checked": True}
+    result = {"replied": False, "reply_text": None, "checked": True, "chat_history": []}
 
     logger.info(f"\n[REPLY CHECKER] 🔍 Checking replies for: {contact_name} ({profile_url})")
 
@@ -413,6 +413,8 @@ def check_reply_for_contact(
                 logger.info(f"[REPLY CHECKER] ℹ️   No messages found in thread (or couldn't parse).")
                 return result
 
+            result["chat_history"] = messages
+
             # 3. Check: is the LAST message from the contact (not from us)?
             last_msg = messages[-1]
             if not last_msg["is_self"]:
@@ -424,6 +426,7 @@ def check_reply_for_contact(
                 )
             else:
                 logger.info(f"[REPLY CHECKER] ℹ️   Last message is ours — no reply yet from {contact_name}.")
+
 
         except LinkedInSessionExpiredError:
             logger.info("[REPLY CHECKER] ⛔ LinkedIn session expired.")

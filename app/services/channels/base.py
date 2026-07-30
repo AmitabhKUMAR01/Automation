@@ -31,6 +31,10 @@ class NotificationChannel(ABC):
         contact_name: str,
         company_name: str,
         reply_snippet: str,
-    ) -> None:
-        """Called when a reply to a LinkedIn pitch DM is detected."""
+        profile_id: int | None = None,
+        suggested_reply: str | None = None,
+        sales_pitch_id: int | None = None,
+    ) -> str | None:
+        """Called when a reply to a LinkedIn pitch DM is detected. Returns chat_id if available."""
         ...
+

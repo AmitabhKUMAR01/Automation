@@ -30,14 +30,14 @@ def _build_base(event: str) -> dict:
     }
 
 
-def _post(payload: dict) -> bool:
-    """POST a JSON payload to the webhook URL with Bearer token auth."""
+def _post(payload: dict) -> tuple[bool, dict | None]:
+    """POST a JSON payload to the webhook URL with Bearer token auth. Returns (success, response_json)."""
     webhook_url = os.getenv("WEBHOOK_URL", "").strip()
     webhook_token = os.getenv("WEBHOOK_TOKEN", "").strip()
 
     if not webhook_url:
         logger.warning("[NOTIFY:TELEGRAM] WEBHOOK_URL not set — notification skipped.")
-        return True  # not a failure, just unconfigured
+        return True, None  # not a failure, just unconfigured
 
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if webhook_token:
@@ -47,7 +47,12 @@ def _post(payload: dict) -> bool:
         response = requests.post(webhook_url, json=payload, headers=headers, timeout=10)
         response.raise_for_status()
         logger.info("[NOTIFY:TELEGRAM] ✅ Webhook alert sent.")
-        return True
+        resp_json = None
+        try:
+            resp_json = response.json()
+        except Exception:
+            pass
+        return True, resp_json
 
     except requests.exceptions.Timeout:
         logger.warning("[NOTIFY:TELEGRAM] ❌ Webhook request timed out.")
@@ -60,7 +65,7 @@ def _post(payload: dict) -> bool:
     except Exception as e:
         logger.warning(f"[NOTIFY:TELEGRAM] ❌ Webhook dispatch failed: {e}")
 
-    return False
+    return False, None
 
 
 class TelegramNotificationChannel(NotificationChannel):
@@ -124,17 +129,36 @@ class TelegramNotificationChannel(NotificationChannel):
         contact_name: str,
         company_name: str,
         reply_snippet: str,
-    ) -> None:
-        snippet = (reply_snippet or "")[:300]
-        _post(
-            {
-                **_build_base("reply_received"),
-                "event"         : "reply_received",
-                "contact_name"  : contact_name,
-                "contact_company": company_name,
-                "reply_snippet" : snippet,
-                "message"       : (
-                    f"💬 Reply from *{contact_name}* ({company_name}):\n{snippet}"
-                ),
-            }
-        )
+        profile_id: int | None = None,
+        suggested_reply: str | None = None,
+        sales_pitch_id: int | None = None,
+    ) -> str | None:
+        snippet = (reply_snippet or "")[:500]
+        msg_text = f"💬 Reply from *{contact_name}* ({company_name}):\n{snippet}"
+        if suggested_reply:
+            msg_text += f"\n\n🤖 *Suggested Reply*:\n{suggested_reply}"
+
+        payload = {
+            **_build_base("reply_received"),
+            "event"           : "reply_received",
+            "profile_id"      : profile_id,
+            "sales_pitch_id"  : sales_pitch_id,
+            "contact_name"    : contact_name,
+            "contact_company" : company_name,
+            "reply_snippet"   : snippet,
+            "suggested_reply" : suggested_reply or "",
+            "message"         : msg_text,
+        }
+
+        success, resp_json = _post(payload)
+
+        chat_id = None
+        if success and resp_json and isinstance(resp_json, dict):
+            # Parse chat_id from response format:
+            # { "status": "success", "message": "Message processed", "data": [ { "chat_id": "-1003332224534", "status": "sent" } ] }
+            data_list = resp_json.get("data")
+            if isinstance(data_list, list) and len(data_list) > 0 and isinstance(data_list[0], dict):
+                chat_id = str(data_list[0].get("chat_id") or "").strip() or None
+
+        return chat_id
+

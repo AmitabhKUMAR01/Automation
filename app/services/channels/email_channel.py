@@ -155,7 +155,10 @@ class EmailNotificationChannel(NotificationChannel):
         contact_name: str,
         company_name: str,
         reply_snippet: str,
-    ) -> None:
+        profile_id: int | None = None,
+        suggested_reply: str | None = None,
+        sales_pitch_id: int | None = None,
+    ) -> str | None:
         subject = f"💬 LinkedIn Reply Received — {contact_name}"
         snippet_safe = (reply_snippet or "")[:300].replace("<", "&lt;").replace(">", "&gt;")
         rows = [
@@ -163,8 +166,13 @@ class EmailNotificationChannel(NotificationChannel):
             ("Company", company_name),
             ("Reply",   f"<em style='color:#2c3e50'>\"{snippet_safe}...\"</em>"),
         ]
+        if suggested_reply:
+            sug_safe = suggested_reply.replace("<", "&lt;").replace(">", "&gt;")
+            rows.append(("Suggested Reply", f"<div style='background:#f0f7ff;padding:8px;border-left:3px solid #2980b9'>{sug_safe}</div>"))
         body = _card(
             "💬", "Reply Received", "#2980b9", rows,
             note="Log in to LinkedIn to view the full conversation and respond."
         )
         _send(subject, body)
+        return None
+

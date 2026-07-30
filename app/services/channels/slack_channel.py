@@ -113,8 +113,17 @@ class SlackNotificationChannel(NotificationChannel):
         contact_name: str,
         company_name: str,
         reply_snippet: str,
-    ) -> None:
+        profile_id: int | None = None,
+        suggested_reply: str | None = None,
+        sales_pitch_id: int | None = None,
+    ) -> str | None:
         snippet = (reply_snippet or "")[:300]
+        fields = [
+            {"type": "mrkdwn", "text": f"*Contact:*\n{contact_name}"},
+            {"type": "mrkdwn", "text": f"*Company:*\n{company_name}"},
+        ]
+        if suggested_reply:
+            fields.append({"type": "mrkdwn", "text": f"*Suggested Reply:*\n{suggested_reply}"})
         _post({
             "text": f":speech_balloon: Reply from *{contact_name}* ({company_name})",
             "blocks": [
@@ -124,10 +133,7 @@ class SlackNotificationChannel(NotificationChannel):
                 },
                 {
                     "type": "section",
-                    "fields": [
-                        {"type": "mrkdwn", "text": f"*Contact:*\n{contact_name}"},
-                        {"type": "mrkdwn", "text": f"*Company:*\n{company_name}"},
-                    ],
+                    "fields": fields,
                 },
                 {
                     "type": "section",
@@ -140,3 +146,5 @@ class SlackNotificationChannel(NotificationChannel):
                 {"type": "divider"},
             ],
         })
+        return None
+

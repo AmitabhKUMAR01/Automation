@@ -81,5 +81,34 @@ Rules:
 - Do NOT use words like "synergy", "leverage", "game-changer"
 """
 
+# ── LinkedIn DM Suggested Reply (based on full chat history) ─────────────────
+SUGGESTED_REPLY_PROMPT_TEMPLATE = """You are a top-performing B2B sales development representative responding to a client's LinkedIn message.
+
+CONTACT DETAILS:
+- Contact Name: {contact_name}
+- Company: {company_name}
+
+INITIAL PITCH CONTEXT:
+- Original Pitch: {pitch_context}
+
+FULL CHAT HISTORY (in chronological order):
+{chat_history_text}
+
+TASK:
+Analyze the conversation trajectory above and generate a natural, conversational, professional 1-3 sentence LinkedIn DM reply to respond to {contact_name}'s latest message.
+
+OUTPUT FORMAT (strict JSON, no markdown):
+{{
+  "suggested_reply": "<1-3 sentence natural, peer-to-peer LinkedIn DM follow-up response>"
+}}
+
+Rules:
+- Address {contact_name} by FIRST NAME
+- Directly answer or acknowledge their latest message while taking the conversation forward
+- Keep it brief (20-60 words), human, and helpful — no hard sales push or pushiness
+- Sound like a real colleague/consultant sending a quick message
+"""
+
 # Backwards-compatible alias (existing code that imports HUMAN_PROMPT_TEMPLATE still works)
 HUMAN_PROMPT_TEMPLATE = EMAIL_PROMPT_TEMPLATE
+

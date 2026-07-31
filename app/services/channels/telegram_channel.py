@@ -106,6 +106,7 @@ class TelegramNotificationChannel(NotificationChannel):
         company_name: str,
         profile_name: str = "",
     ) -> None:
+        url_str = str(profile_url or "").strip()
         _post(
             {
                 **_build_base("connection_accepted"),
@@ -113,10 +114,10 @@ class TelegramNotificationChannel(NotificationChannel):
                 "action_id_name": profile_name,  # which LinkedIn account took the action
                 "contact_name": contact_name,
                 "contact_company": company_name,
-                "contact_profile_url": profile_url,
+                "contact_profile_url": url_str,
                 "message": (
                     f"🤝 LinkedIn connection accepted: *{contact_name}* ({company_name})\n"
-                    f"Profile: {profile_url}"
+                    f"{url_str}"
                     + (f"\nAccount: {profile_name}" if profile_name else "")
                 ),
             }
@@ -134,9 +135,6 @@ class TelegramNotificationChannel(NotificationChannel):
         sales_pitch_id: int | None = None,
     ) -> str | None:
         snippet = (reply_snippet or "")[:500]
-        msg_text = f"💬 Reply from *{contact_name}* ({company_name}):\n{snippet}"
-        if suggested_reply:
-            msg_text += f"\n\n🤖 *Suggested Reply*:\n{suggested_reply}"
 
         payload = {
             **_build_base("reply_received"),
@@ -147,10 +145,10 @@ class TelegramNotificationChannel(NotificationChannel):
             "contact_company" : company_name,
             "reply_snippet"   : snippet,
             "suggested_reply" : suggested_reply or "",
-            "message"         : msg_text,
         }
 
         success, resp_json = _post(payload)
+
 
         chat_id = None
         if success and resp_json and isinstance(resp_json, dict):

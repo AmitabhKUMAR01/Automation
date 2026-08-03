@@ -6,7 +6,7 @@ from apscheduler.executors.pool import ThreadPoolExecutor
 from app.config.database import SessionLocal
 from app.services.lead_service import run_lead_job, load_config
 import threading
-from app.services.sheet_exporter import export_to_google_sheet
+from app.services.sheet_exporter import export_to_google_sheet, export_linkedin_contacts_to_sheet
 from app.services.website_audit_service import run_audit_job
 from app.services.lead_scoring_service import run_lead_score_job
 from app.services.linkedin_service import run_linkedin_batch_job, run_linkedin_daily_connections, run_linkedin_acceptance_check, run_linkedin_search_and_connect
@@ -231,10 +231,6 @@ def _update_run(
 # ── Job Scheduling ─────────────────────────────────────────────────────────────
 
 def _get_linkedin_search_schedule() -> tuple[int, int]:
-    """
-    Read the schedule time from the active LinkedinSearchConfig row.
-    Falls back to LINKEDIN_SCHEDULE_HOUR / LINKEDIN_SCHEDULE_MINUTE env vars.
-    """
     try:
         db = SessionLocal()
         try:
@@ -305,6 +301,20 @@ def schedule_jobs():
         replace_existing=True,
         jitter=120,
     )
+
+    # ---- LinkedIn Contacts Sheet Export Job ----
+    linkedin_export_hour   = int(os.getenv("LINKEDIN_EXPORT_SCHEDULE_HOUR",   "9"))
+    linkedin_export_minute = int(os.getenv("LINKEDIN_EXPORT_SCHEDULE_MINUTE", "30"))
+    _scheduler.add_job(
+        make_tracked_job(export_linkedin_contacts_to_sheet, job_id="daily_linkedin_contacts_export", job_name="LinkedIn Contacts Sheet Export", max_retries=2, retry_delay_sec=default_retry_delay),
+        "cron",
+        hour=linkedin_export_hour,
+        minute=linkedin_export_minute,
+        id="daily_linkedin_contacts_export",
+        replace_existing=True,
+        jitter=120,
+    )
+    logger.info(f"[SCHEDULER] LinkedIn contacts export job scheduled at {linkedin_export_hour:02d}:{linkedin_export_minute:02d} daily.")
 
     # ---- Website Audit Job ----
     audit_hour   = int(os.getenv("AUDIT_SCHEDULE_HOUR",   "1"))

@@ -4,6 +4,9 @@ import os
 from google.oauth2.service_account import Credentials
 from datetime import date
 from app.services.lead_service import get_todays_records
+from app.config.database import SessionLocal
+from app.models.linkedin_search_contact import LinkedinSearchContact
+from sqlalchemy import func
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -74,6 +77,79 @@ def export_to_google_sheet():
     worksheet.format("1:1", {"textFormat": {"bold": True}})
 
     logger.info(f"[Exporter] ✅ Exported {len(records)} records to tab '{tab_name}'.")
+
+
+# ── LinkedIn Search Contacts Export ───────────────────────────────────────────
+
+def get_todays_linkedin_contacts() -> list[dict]:
+    """Fetch all LinkedinSearchContact rows created today and return as list of dicts."""
+    db = SessionLocal()
+    try:
+        today = date.today()
+        contacts = (
+            db.query(LinkedinSearchContact)
+            .filter(func.date(LinkedinSearchContact.created_at) == today)
+            .order_by(LinkedinSearchContact.created_at.asc())
+            .all()
+        )
+
+        results = []
+        for c in contacts:
+            results.append({
+                "Name"               : c.name                or "",
+                "Profile URL"        : c.profile_url         or "",
+                "Position"           : c.position            or "",
+                "Location"           : c.location            or "",
+                "Source"             : c.source              or "",
+                "Connection Sent"    : "Yes" if c.connection_sent    else "No",
+                "Connection Sent At" : c.connection_sent_at.strftime("%Y-%m-%d %H:%M") if c.connection_sent_at else "",
+                "Is Connected"       : "Yes" if c.is_connected       else "No",
+                "Connected At"       : c.connected_at.strftime("%Y-%m-%d %H:%M")       if c.connected_at       else "",
+                "Profile ID"         : str(c.profile_id)    if c.profile_id is not None else "",
+                "Created At"         : c.created_at.strftime("%Y-%m-%d %H:%M")         if c.created_at         else "",
+            })
+        return results
+    finally:
+        db.close()
+
+
+def export_linkedin_contacts_to_sheet():
+    sheet_id = os.getenv("LINKEDIN_CONTACTS_SHEET_ID")
+
+    if not sheet_id:
+        logger.warning("[LinkedIn Exporter] LINKEDIN_CONTACTS_SHEET_ID not set. Skipping.")
+        return
+
+    contacts = get_todays_linkedin_contacts()
+    if not contacts:
+        logger.info(f"[LinkedIn Exporter] No LinkedIn contacts for today ({date.today()}). Skipping.")
+        return
+
+    # Auth from env
+    creds  = get_google_creds()
+    client = gspread.authorize(creds)
+
+    # Open the dedicated LinkedIn contacts sheet
+    spreadsheet = client.open_by_key(sheet_id)
+    tab_name    = f"linkedin_{date.today().strftime('%Y-%m-%d')}"
+
+    try:
+        worksheet = spreadsheet.worksheet(tab_name)
+        worksheet.clear()
+    except gspread.exceptions.WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(
+            title=tab_name, rows=len(contacts) + 5, cols=len(contacts[0]) + 2
+        )
+
+    # Write header + rows
+    headers = list(contacts[0].keys())
+    rows    = [list(c.values()) for c in contacts]
+    worksheet.update([headers] + rows)
+
+    # Bold the header row
+    worksheet.format("1:1", {"textFormat": {"bold": True}})
+
+    logger.info(f"[LinkedIn Exporter] ✅ Exported {len(contacts)} contacts to tab '{tab_name}'.")
 
 
 if __name__ == "__main__":

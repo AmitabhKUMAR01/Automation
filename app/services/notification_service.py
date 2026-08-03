@@ -68,9 +68,22 @@ def notify_reply_received(
     contact_name: str,
     company_name: str,
     reply_snippet: str,
-) -> None:
-    """Send an alert when a reply to a LinkedIn pitch DM is detected."""
+    profile_id: int | None = None,
+    suggested_reply: str | None = None,
+    sales_pitch_id: int | None = None,
+) -> str | None:
+    """Send an alert when a reply to a LinkedIn pitch DM is detected.
+    Returns the Telegram chat_id captured from the webhook response, or None.
+    """
     try:
-        get_channel().send_reply_received(contact_name, company_name, reply_snippet)
+        return get_channel().send_reply_received(
+            contact_name,
+            company_name,
+            reply_snippet,
+            profile_id=profile_id,
+            suggested_reply=suggested_reply,
+            sales_pitch_id=sales_pitch_id,
+        )
     except Exception as exc:
         logger.error(f"[NOTIFY] ❌ Failed to send reply received notification: {exc}")
+        return None

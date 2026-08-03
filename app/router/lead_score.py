@@ -16,13 +16,16 @@ from app.services.lead_scoring_service import (
 )
 from app.services.pitch_reply_service import check_pitch_replies
 from app.utils.response import success, error
+from pydantic import BaseModel
+from app.models.client_chat_message import ClientChatMessage
+from app.services.pitch_reply_service import _resolve_contact
+from app.scraper.linkedin_dm_sender import send_linkedin_dm
+from app.models.sales_pitch import SalesPitch as SP
+from datetime import timedelta, timezone as tz
+import datetime as _dt
 
 router = APIRouter(prefix="/lead", tags=["Lead Scoring"])
 
-
-# ---------------------------------------------------------------------------
-# POST /lead/score/trigger
-# ---------------------------------------------------------------------------
 
 @router.post("/score/trigger")
 def trigger_lead_scoring(
@@ -122,10 +125,6 @@ def trigger_lead_scoring(
         return error(f"Failed to trigger lead scoring: {exc}")
 
 
-# ---------------------------------------------------------------------------
-# GET /lead/scores
-# ---------------------------------------------------------------------------
-
 @router.get("/scores")
 def get_lead_scores(
     page: int = Query(1, ge=1),
@@ -175,10 +174,6 @@ def get_lead_scores(
         return error(f"Failed to fetch lead scores: {exc}")
 
 
-# ---------------------------------------------------------------------------
-# GET /lead/scores/{client_uuid}
-# ---------------------------------------------------------------------------
-
 @router.get("/scores/{client_uuid}")
 def get_lead_score_for_client(
     client_uuid: str,
@@ -223,11 +218,6 @@ def get_lead_score_for_client(
         )
     except Exception as exc:
         return error(f"Failed to fetch lead score for client: {exc}")
-
-
-# ---------------------------------------------------------------------------
-# GET /lead/pitches
-# ---------------------------------------------------------------------------
 
 @router.get("/pitches")
 def get_sales_pitches(
@@ -277,10 +267,7 @@ def get_sales_pitches(
         return error(f"Failed to fetch sales pitches: {exc}")
 
 
-from pydantic import BaseModel
-from app.models.client_chat_message import ClientChatMessage
-from app.services.pitch_reply_service import _resolve_contact
-from app.scraper.linkedin_dm_sender import send_linkedin_dm
+
 
 
 class WebhookReplyCallbackRequest(BaseModel):
@@ -288,11 +275,6 @@ class WebhookReplyCallbackRequest(BaseModel):
     pitch_id: Optional[int] = None
     profile_id: Optional[int] = None
     action: str  # "yes", "no", or custom text message
-
-
-# ---------------------------------------------------------------------------
-# GET /lead/pitches/replies
-# ---------------------------------------------------------------------------
 
 @router.get("/pitches/replies")
 def get_pitch_replies(
@@ -371,9 +353,6 @@ def get_pitch_replies(
         return error(f"Failed to fetch pitch replies: {exc}")
 
 
-# ---------------------------------------------------------------------------
-# POST /lead/pitches/check-replies
-# ---------------------------------------------------------------------------
 
 @router.post("/pitches/check-replies")
 def trigger_reply_check(
@@ -381,10 +360,6 @@ def trigger_reply_check(
     db: Session = Depends(get_db),
 ):
     try:
-        from app.models.sales_pitch import SalesPitch as SP
-        from datetime import timedelta, timezone as tz
-        import datetime as _dt
-
         cutoff = _dt.datetime.now(tz.utc) - timedelta(hours=12)
         eligible = (
             db.query(SP)
@@ -420,10 +395,6 @@ def trigger_reply_check(
     except Exception as exc:
         return error(f"Failed to trigger reply check: {exc}")
 
-
-# ---------------------------------------------------------------------------
-# POST /lead/pitches/reply-callback
-# ---------------------------------------------------------------------------
 
 @router.post("/pitches/reply-callback")
 def handle_webhook_reply_callback(
@@ -511,10 +482,6 @@ def handle_webhook_reply_callback(
         return error(f"Failed to process webhook reply callback: {exc}")
 
 
-# ---------------------------------------------------------------------------
-# GET /lead/pitches/{pitch_id}/chat-history
-# ---------------------------------------------------------------------------
-
 @router.get("/pitches/{pitch_id}/chat-history")
 def get_pitch_chat_history(
     pitch_id: int,
@@ -539,10 +506,6 @@ def get_pitch_chat_history(
     except Exception as exc:
         return error(f"Failed to fetch chat history: {exc}")
 
-
-# ---------------------------------------------------------------------------
-# GET /lead/summary
-# ---------------------------------------------------------------------------
 
 @router.get("/summary")
 def get_lead_summary(db: Session = Depends(get_db)):

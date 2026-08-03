@@ -150,13 +150,15 @@ class TelegramNotificationChannel(NotificationChannel):
         success, resp_json = _post(payload)
 
 
-        chat_id = None
+        telegram_message_id = None
         if success and resp_json and isinstance(resp_json, dict):
-            # Parse chat_id from response format:
-            # { "status": "success", "message": "Message processed", "data": [ { "chat_id": "-1003332224534", "status": "sent" } ] }
             data_list = resp_json.get("data")
             if isinstance(data_list, list) and len(data_list) > 0 and isinstance(data_list[0], dict):
-                chat_id = str(data_list[0].get("chat_id") or "").strip() or None
+                try:
+                    message_id = data_list[0]["data"]["result"]["message_id"]
+                    telegram_message_id = str(message_id) if message_id is not None else None
+                except (KeyError, TypeError):
+                    logger.warning("[NOTIFY:TELEGRAM] ⚠️ Could not extract message_id from webhook response.")
 
-        return chat_id
+        return telegram_message_id
 

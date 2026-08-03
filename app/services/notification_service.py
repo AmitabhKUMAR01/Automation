@@ -16,7 +16,6 @@ _channel_instance: NotificationChannel | None = None
 
 
 def get_channel() -> NotificationChannel:
-    """Return the singleton channel instance, creating it if necessary."""
     global _channel_instance
     if _channel_instance is not None:
         return _channel_instance
@@ -43,7 +42,6 @@ def notify_job_failure(
     tb: str,
     retry_count: int,
 ) -> None:
-    """Send an alert when a scheduled job fails."""
     try:
         get_channel().send_job_failure(job_id, job_name, error, tb, retry_count)
     except Exception as exc:
@@ -57,7 +55,6 @@ def notify_connection_accepted(
     company_name: str,
     profile_name: str = "",
 ) -> None:
-    """Send an alert when a LinkedIn connection request is accepted."""
     try:
         get_channel().send_connection_accepted(contact_name, profile_url, company_name, profile_name=profile_name)
     except Exception as exc:
@@ -72,9 +69,6 @@ def notify_reply_received(
     suggested_reply: str | None = None,
     sales_pitch_id: int | None = None,
 ) -> str | None:
-    """Send an alert when a reply to a LinkedIn pitch DM is detected.
-    Returns the Telegram chat_id captured from the webhook response, or None.
-    """
     try:
         return get_channel().send_reply_received(
             contact_name,

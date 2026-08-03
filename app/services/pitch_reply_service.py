@@ -336,10 +336,6 @@ def _run_thread_check_phase(
     cfg: dict,
     summary: dict,
 ) -> None:
-    """
-    Phase 2: Open individual conversation threads for the shortlisted
-    pitches and extract reply text using the existing reply checker.
-    """
     logger.info(f"[REPLY CHECK] 🔍 Phase 2: Deep-checking {len(pitches)} thread(s)…")
 
     for pitch in pitches:

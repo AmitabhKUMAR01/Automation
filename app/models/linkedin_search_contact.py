@@ -43,4 +43,7 @@ class LinkedinSearchContact(Base):
     # Profile that sent this connection
     profile_id = Column(Integer, nullable=True)
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at  = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Export tracking — NULL = not yet exported to Google Sheets
+    exported_at = Column(DateTime(timezone=True), nullable=True)

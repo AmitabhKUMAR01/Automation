@@ -226,8 +226,37 @@ def poll_once(db: Session) -> int:
 
     return processed
 
+def _run_once() -> None:
+    """Single poll cycle — used when invoked from cron."""
+    db = SessionLocal()
+    try:
+        count = poll_once(db)
+        if count:
+            logger.info(f"[POLLER] ✅ Processed {count} action(s).")
+        else:
+            logger.info("[POLLER] No pending actions.")
+    except Exception as exc:
+        logger.error(f"[POLLER] ❌ Unexpected poll error: {exc}")
+    finally:
+        db.close()
+
 
 def main() -> None:
+    import argparse
+    parser = argparse.ArgumentParser(description="Telegram action poller")
+    parser.add_argument(
+        "--once", "-1",
+        action="store_true",
+        help="Run a single poll cycle and exit (use this from cron).",
+    )
+    args = parser.parse_args()
+
+    if args.once:
+        logger.info("[POLLER] 🕐 Running single poll cycle (cron mode)…")
+        _run_once()
+        return
+
+    # ── Daemon mode (default) ─────────────────────────────────────────────────
     logger.info(
         f"[POLLER] 🚀 Telegram action poller started — "
         f"polling every {POLL_INTERVAL}s"
@@ -235,18 +264,7 @@ def main() -> None:
     logger.info("[POLLER] Press Ctrl+C to stop.")
 
     while True:
-        db = SessionLocal()
-        try:
-            count = poll_once(db)
-            if count:
-                logger.info(f"[POLLER] ✅ Processed {count} action(s) this cycle.")
-            else:
-                logger.debug("[POLLER] No pending actions.")
-        except Exception as exc:
-            logger.error(f"[POLLER] ❌ Unexpected poll error: {exc}")
-        finally:
-            db.close()
-
+        _run_once()
         time.sleep(POLL_INTERVAL)
 
 

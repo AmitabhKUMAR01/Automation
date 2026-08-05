@@ -18,6 +18,7 @@ from app.models.scheduler_job_run import SchedulerJobRun
 from app.services.notification_service import notify_job_failure
 from app.utils.logger import logger
 from app.models.linkedin_search_config import LinkedinSearchConfig
+from run_telegram_action_poller import poll_once as _telegram_poll_once
 
 TRACKER_FILE = os.path.join(os.path.dirname(__file__), "last_job_tracker.json")
 LOCK_FILE    = os.path.join(os.path.dirname(__file__), "job.lock")  # ADDED: lock file
@@ -120,6 +121,21 @@ def scheduled_pitch_delivery():
 
 def scheduled_pitch_reply_check():
     _run_job_for_profiles("daily_pitch_reply_check", run_pitch_reply_check_job)
+
+
+def scheduled_telegram_action_poll():
+    """Poll the bridge API for pending Telegram actions and process them."""
+    db = SessionLocal()
+    try:
+        count = _telegram_poll_once(db)
+        if count:
+            logger.info(f"[SCHEDULER] ✅ Telegram poller processed {count} action(s).")
+        else:
+            logger.debug("[SCHEDULER] Telegram poller — no pending actions.")
+    except Exception as exc:
+        logger.error(f"[SCHEDULER] ❌ Telegram poller error: {exc}")
+    finally:
+        db.close()
 
 
 # ── Job Tracking Wrapper ──────────────────────────────────────────────────────
@@ -408,6 +424,22 @@ def schedule_jobs():
         jitter=45,
     )
     logger.info(f"[SCHEDULER] Pitch reply check job scheduled every {reply_interval_hours} minute(s).")
+
+    # ---- Telegram Action Poller (polls bridge API for pending actions) ----
+    telegram_poll_interval_sec = int(os.getenv("TELEGRAM_POLLER_INTERVAL_SEC", "60"))
+    _scheduler.add_job(
+        make_tracked_job(
+            scheduled_telegram_action_poll,
+            job_id="telegram_action_poll",
+            job_name="Telegram Action Poller",
+            max_retries=0,
+        ),
+        "interval",
+        seconds=telegram_poll_interval_sec,
+        id="telegram_action_poll",
+        replace_existing=True,
+    )
+    logger.info(f"[SCHEDULER] Telegram action poller scheduled every {telegram_poll_interval_sec}s.")
 
     _scheduler.start()
     return _scheduler

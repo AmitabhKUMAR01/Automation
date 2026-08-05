@@ -5,6 +5,9 @@ import sys
 import time
 import logging
 from datetime import datetime, timezone
+from typing import Any
+
+import requests
 
 # ── Make project imports work when running from root ────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -15,7 +18,6 @@ load_dotenv()
 from sqlalchemy.orm import Session
 
 from app.config.database import SessionLocal
-from app.models.telegram_pending_action import TelegramPendingAction
 from app.models.client_chat_message import ClientChatMessage
 from app.models.sales_pitch import SalesPitch
 from app.services.pitch_reply_service import _resolve_contact
@@ -24,61 +26,131 @@ from app.utils.logger import logger
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-POLL_INTERVAL = int(os.getenv("TELEGRAM_POLLER_INTERVAL_SEC", "60"))
+POLL_INTERVAL    = int(os.getenv("TELEGRAM_POLLER_INTERVAL_SEC", "60"))
+BRIDGE_API_URL   = os.getenv("BRIDGE_API_URL", "https://bridge.pandanext.in")
+BRIDGE_API_TOKEN = os.getenv("BRIDGE_API_TOKEN", "iqh-3MuMOfsedcLu4VnGeUdZs8Sajkx1CbdNlYcgN60")
+
+
+# ── Bridge API helpers ────────────────────────────────────────────────────────
+
+def _fetch_pending_actions(page: int = 1, per_page: int = 50) -> list[dict]:
+    """
+    Fetch pending actions from the bridge webhook API.
+    Returns a flat list of action dicts from all pages.
+    """
+    url     = f"{BRIDGE_API_URL}/pending-actions"
+    headers = {
+        "accept":        "application/json",
+        "Authorization": f"Bearer {BRIDGE_API_TOKEN}",
+    }
+    all_items: list[dict] = []
+    current_page = page
+
+    while True:
+        params = {"page": current_page, "per_page": per_page, "status": "pending"}
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=30)
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            logger.error(f"[POLLER] ❌ Failed to fetch pending actions (page={current_page}): {exc}")
+            break
+
+        body = resp.json()
+        items = body.get("data", {}).get("items", [])
+        all_items.extend(items)
+
+        pagination = body.get("data", {}).get("pagination", {})
+        if current_page >= pagination.get("last_page", 1):
+            break
+        current_page += 1
+
+    return all_items
+
+
+def _mark_action_status(
+    action_id: int,
+    status: str,
+    error_message: str | None = None,
+) -> None:
+    """
+    PATCH the bridge API to update an action's status (e.g. 'done' or 'failed').
+    """
+    url     = f"{BRIDGE_API_URL}/pending-actions/{action_id}/status"
+    headers = {
+        "accept":        "application/json",
+        "Content-Type":  "application/json",
+        "Authorization": f"Bearer {BRIDGE_API_TOKEN}",
+    }
+    payload: dict[str, Any] = {
+        "status":        status,
+        "error_message": (error_message or "")[:2000],
+    }
+
+    try:
+        resp = requests.patch(url, headers=headers, json=payload, timeout=15)
+        resp.raise_for_status()
+        logger.debug(f"[POLLER] Bridge action id={action_id} marked as '{status}'.")
+    except requests.RequestException as exc:
+        logger.warning(
+            f"[POLLER] ⚠️  Could not update bridge action id={action_id} status to '{status}': {exc}"
+        )
+
 
 # ── Core processing logic ─────────────────────────────────────────────────────
 
-def _process_action(row: TelegramPendingAction, db: Session) -> None:
+def _process_action(action: dict, db: Session) -> None:
     """
-    Execute the reply-callback logic for a single pending action row.
-    Mirrors the logic in handle_webhook_reply_callback() in lead_score.py.
+    Execute the reply-callback logic for a single pending action dict
+    (as returned by the bridge webhook API).
 
-    Raises on failure — caller marks the row as failed.
+    Raises on failure — caller marks the action as failed.
     """
-    chat_id    = row.chat_id
-    pitch_id   = row.pitch_id
-    profile_id = row.profile_id or 1
-    action_str = (row.action or "").strip()
+    action_id    = action["id"]
+    # chat_id / reply_chat_id come from the webhook payload
+    chat_id      = action.get("reply_chat_id") or action.get("chat_id")
+    action_str   = (action.get("action") or "").strip()
     action_lower = action_str.lower()
+    profile_id   = 1   # default; override via raw_payload if needed
 
     logger.info(
-        f"[POLLER] Processing action id={row.id} | chat_id={chat_id} "
-        f"| pitch_id={pitch_id} | action={action_str!r}"
+        f"[POLLER] Processing action id={action_id} | chat_id={chat_id} "
+        f"| action={action_str!r}"
     )
 
-    # ── Resolve the ClientChatMessage ────────────────────────────────────────
-    query = db.query(ClientChatMessage)
-    if chat_id:
-        query = query.filter(ClientChatMessage.telegram_chat_id == chat_id)
-    elif pitch_id:
-        query = query.filter(ClientChatMessage.sales_pitch_id == pitch_id)
-    else:
-        raise ValueError("Action row has neither chat_id nor pitch_id — cannot resolve message")
+    # ── Resolve the ClientChatMessage via telegram_chat_id ───────────────────
+    if not chat_id:
+        raise ValueError(f"Action id={action_id} has no usable chat_id / reply_chat_id")
 
-    chat_msg = query.order_by(ClientChatMessage.id.desc()).first()
+    chat_msg = (
+        db.query(ClientChatMessage)
+        .filter(ClientChatMessage.telegram_chat_id == str(chat_id))
+        .order_by(ClientChatMessage.id.desc())
+        .first()
+    )
     if not chat_msg:
-        raise ValueError(f"ClientChatMessage not found for chat_id={chat_id} / pitch_id={pitch_id}")
+        raise ValueError(
+            f"ClientChatMessage not found for telegram_chat_id={chat_id!r}"
+        )
 
     # ── Resolve the SalesPitch ───────────────────────────────────────────────
-    resolved_pitch_id = pitch_id or chat_msg.sales_pitch_id
-    pitch = db.query(SalesPitch).filter(SalesPitch.id == resolved_pitch_id).first()
+    pitch = db.query(SalesPitch).filter(SalesPitch.id == chat_msg.sales_pitch_id).first()
     if not pitch:
-        raise ValueError(f"SalesPitch id={resolved_pitch_id} not found")
+        raise ValueError(f"SalesPitch id={chat_msg.sales_pitch_id} not found")
 
     # ── Resolve the LinkedIn contact ─────────────────────────────────────────
     contact, contact_type = _resolve_contact(pitch, db)
     if not contact:
-        raise ValueError(f"No linked contact found for pitch id={resolved_pitch_id}")
+        raise ValueError(f"No linked contact found for pitch id={pitch.id}")
 
     # ── Handle reject actions ────────────────────────────────────────────────
     if action_lower in ("no", "reject", "cancel"):
         chat_msg.status = "rejected"
         db.commit()
-        logger.info(f"[POLLER] ✅ Action id={row.id} → rejected, no DM sent.")
+        logger.info(f"[POLLER] ✅ Action id={action_id} → rejected, no DM sent.")
         return
 
     # ── Determine text to send ───────────────────────────────────────────────
-    if action_lower == "yes":
+    if action_lower in ("yes", "y"):
         text_to_send = (
             chat_msg.suggested_reply
             or "Thank you for getting in touch! We'd be happy to discuss further."
@@ -96,7 +168,7 @@ def _process_action(row: TelegramPendingAction, db: Session) -> None:
     )
 
     if sent_ok:
-        chat_msg.status         = "approved" if action_lower == "yes" else "custom_sent"
+        chat_msg.status          = "approved" if action_lower in ("yes", "y") else "custom_sent"
         chat_msg.sent_reply_text = text_to_send
 
         # Record the sent message in chat history
@@ -114,7 +186,7 @@ def _process_action(row: TelegramPendingAction, db: Session) -> None:
         db.commit()
         logger.info(
             f"[POLLER] ✅ DM sent to {getattr(contact, 'name', 'contact')!r} "
-            f"(action id={row.id})"
+            f"(action id={action_id})"
         )
     else:
         chat_msg.status = "delivery_failed"
@@ -127,49 +199,30 @@ def _process_action(row: TelegramPendingAction, db: Session) -> None:
 # ── Poll loop ─────────────────────────────────────────────────────────────────
 
 def poll_once(db: Session) -> int:
-    """
-    Process all pending rows in one poll cycle.
-    Returns the number of rows processed.
-    """
-    rows = (
-        db.query(TelegramPendingAction)
-        .filter(TelegramPendingAction.status == "pending")
-        .order_by(TelegramPendingAction.created_at.asc())
-        .all()
-    )
+    actions = _fetch_pending_actions()
 
-    if not rows:
+    if not actions:
         return 0
 
-    logger.info(f"[POLLER] 🔍 Found {len(rows)} pending action(s) to process.")
+    logger.info(f"[POLLER] 🔍 Found {len(actions)} pending action(s) to process.")
 
     processed = 0
-    for row in rows:
-        # ── Mark as processing to prevent double-processing ────────────────
-        row.status = "processing"
-        try:
-            db.commit()
-        except Exception:
-            db.rollback()
-            continue   # another poller instance got there first
+    for action in actions:
+        action_id = action["id"]
+
+        # Optimistically mark as processing on the bridge so other poller
+        # instances (if any) skip this action.
+        _mark_action_status(action_id, "processing")
 
         # ── Process ────────────────────────────────────────────────────────
         try:
-            _process_action(row, db)
-            row.status       = "done"
-            row.processed_at = datetime.now(timezone.utc)
-            db.commit()
+            _process_action(action, db)
+            _mark_action_status(action_id, "done")
             processed += 1
         except Exception as exc:
             db.rollback()
-            logger.error(f"[POLLER] ❌ Action id={row.id} failed: {exc}")
-            try:
-                row.status        = "failed"
-                row.error_message = str(exc)[:2000]
-                row.processed_at  = datetime.now(timezone.utc)
-                db.commit()
-            except Exception:
-                db.rollback()
+            logger.error(f"[POLLER] ❌ Action id={action_id} failed: {exc}")
+            _mark_action_status(action_id, "failed", error_message=str(exc))
 
     return processed
 

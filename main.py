@@ -8,8 +8,7 @@ from app.core.scheduler import schedule_jobs, get_scheduler
 import app.models.website_audit
 import app.models.lead_score
 import app.models.sales_pitch
-import app.models.linkedin_contact
-import app.models.telegram_pending_action   # registers telegram_pending_actions table
+import app.models.linkedin_contact # registers telegram_pending_actions table
 
 app = FastAPI(title="API")
 

@@ -144,12 +144,14 @@ class TelegramNotificationChannel(NotificationChannel):
             "contact_name"    : contact_name,
             "contact_company" : company_name,
             "reply_snippet"   : snippet,
-            "suggested_reply" : suggested_reply or "",
+            "reply_suggestion" : suggested_reply or "",
         }
+
+        # logger.info(f"[NOTIFY:TELEGRAM] 💬 Sending reply received notification to Telegram. Payload: {payload}")
 
         success, resp_json = _post(payload)
 
-
+        # logger.info(f"[NOTIFY:TELEGRAM] 💬 Reply received notification sent successfully. Response: {resp_json}")
         telegram_message_id = None
         if success and resp_json and isinstance(resp_json, dict):
             data_list = resp_json.get("data")

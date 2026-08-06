@@ -110,7 +110,6 @@ def _process_action(action: dict, db: Session) -> None:
     chat_id      = action.get("reply_chat_id") or action.get("chat_id")
     action_str   = (action.get("action") or "").strip()
     action_lower = action_str.lower()
-    profile_id   = 1   # default; override via raw_payload if needed
 
     logger.info(
         f"[POLLER] Processing action id={action_id} | chat_id={chat_id} "
@@ -132,6 +131,22 @@ def _process_action(action: dict, db: Session) -> None:
             f"ClientChatMessage not found for telegram_chat_id={chat_id!r}"
         )
 
+    # ── Resolve profile_id dynamically ───────────────────────────────────────
+    raw_payload = action.get("raw_payload") or {}
+    if isinstance(raw_payload, str):
+        import json
+        try:
+            raw_payload = json.loads(raw_payload)
+        except Exception:
+            raw_payload = {}
+            
+    profile_id = (
+        action.get("profile_id")
+        or raw_payload.get("profile_id")
+        or chat_msg.profile_id
+        or 1
+    )
+
     # ── Resolve the SalesPitch ───────────────────────────────────────────────
     pitch = db.query(SalesPitch).filter(SalesPitch.id == chat_msg.sales_pitch_id).first()
     if not pitch:
@@ -143,7 +158,7 @@ def _process_action(action: dict, db: Session) -> None:
         raise ValueError(f"No linked contact found for pitch id={pitch.id}")
 
     # ── Handle reject actions ────────────────────────────────────────────────
-    if action_lower in ("no", "reject", "cancel"):
+    if action_lower in ("n", "no", "reject", "cancel"):
         chat_msg.status = "rejected"
         db.commit()
         logger.info(f"[POLLER] ✅ Action id={action_id} → rejected, no DM sent.")
@@ -155,6 +170,8 @@ def _process_action(action: dict, db: Session) -> None:
             chat_msg.suggested_reply
             or "Thank you for getting in touch! We'd be happy to discuss further."
         )
+    elif action_str.startswith("/"):
+        text_to_send = action_str[1:]
     else:
         text_to_send = action_str
 

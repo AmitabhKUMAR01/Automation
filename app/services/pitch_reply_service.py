@@ -25,6 +25,7 @@ from app.core.llm_provider import get_llm
 from app.services.sales_pitch_service import _has_provider_key
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
+from sqlalchemy import exists, case
 
 
 def generate_suggested_reply(
@@ -192,7 +193,7 @@ def _auto_send_reply(
             chat_msg.status = "approved"
             chat_msg.sent_reply_text = text_to_send
 
-        # Record the outgoing DM in chat history
+        # for the follow-up reply checker
         new_msg = ClientChatMessage(
             profile_id=profile_id,
             sales_pitch_id=pitch.id,
@@ -202,6 +203,7 @@ def _auto_send_reply(
             message_body=text_to_send,
             is_self=True,
             status="sent",
+            conversation_active=True,
         )
         db.add(new_msg)
         db.commit()
@@ -263,6 +265,40 @@ def _fetch_checkable_pitches(
             ),
         )
         .order_by(SalesPitch.delivered_at.asc())
+        .limit(max_per_run)
+        .all()
+    )
+
+
+def _fetch_active_conversation_pitches(
+    db: Session, recheck_hours: int, max_per_run: int
+) -> list[SalesPitch]:
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=recheck_hours)
+
+    has_active_msg = exists().where(
+        ClientChatMessage.sales_pitch_id == SalesPitch.id,
+        ClientChatMessage.conversation_active == True,  # noqa: E712
+    )
+
+    null_priority = case(
+        (SalesPitch.reply_checked_at.is_(None), 0),
+        else_=1,
+    )
+
+    return (
+        db.query(SalesPitch)
+        .filter(
+            SalesPitch.pitch_channel == "linkedin",
+            SalesPitch.delivery_status == "sent",
+            SalesPitch.reply_received == True,  # noqa: E712
+            has_active_msg,
+            (
+                SalesPitch.reply_checked_at.is_(None)
+                | (SalesPitch.reply_checked_at < cutoff)
+            ),
+        )
+        .order_by(null_priority, SalesPitch.reply_checked_at.asc())
         .limit(max_per_run)
         .all()
     )
@@ -634,15 +670,196 @@ def check_pitch_replies(db: Session, profile_id: int = 1) -> dict:
     return summary
 
 
-# ── APScheduler entry point ────────────────────────────────────────────────────
+# ── APScheduler entry points ───────────────────────────────────────────────────
 
 
 def run_pitch_reply_check_job(profile_id: int = 1) -> None:
-    """Sync entry point called by APScheduler."""
+    """Sync entry point called by APScheduler (first-reply checker)."""
     db = SessionLocal()
     try:
         check_pitch_replies(db, profile_id=profile_id)
     except Exception as exc:
         logger.info(f"[REPLY CHECK] ❌ Unexpected error in reply check job: {exc}")
+    finally:
+        db.close()
+
+
+# ── Follow-up Reply Checker ────────────────────────────────────────────────────
+
+
+def check_followup_replies(db: Session, profile_id: int = 1) -> dict:
+    """
+    Detect subsequent client replies in conversations where we already sent
+    at least one reply (SalesPitch.reply_received=True).
+
+    Flow:
+      1. Fetch pitches that are post-first-reply and have conversation_active=True.
+      2. Re-open the LinkedIn thread via Playwright.
+      3. Compare scraped messages against what's already in client_chat_messages.
+      4. For every NEW inbound message: persist it, generate LLM suggestion,
+         send Telegram notification, optionally auto-send reply.
+      5. Update reply_checked_at on the pitch to throttle re-checks.
+    """
+    cfg = _cfg()
+    summary = {
+        "checked": 0,
+        "new_replies": 0,
+        "no_change": 0,
+        "skipped": 0,
+        "session_error": False,
+    }
+
+    pitches = _fetch_active_conversation_pitches(
+        db, cfg["recheck_hours"], cfg["max_per_run"]
+    )
+
+    if not pitches:
+        logger.info("[FOLLOWUP CHECK] ℹ️  No active conversations eligible for follow-up check.")
+        return summary
+
+    logger.info(
+        f"[FOLLOWUP CHECK] 🔍 Starting follow-up reply check — {len(pitches)} conversation(s) active."
+    )
+
+    for pitch in pitches:
+        summary["checked"] += 1
+
+        contact, contact_type = _resolve_contact(pitch, db)
+        if not contact or not getattr(contact, "profile_url", None):
+            logger.info(
+                f"[FOLLOWUP CHECK] ⏭️  Pitch {pitch.id} — contact not found or no profile_url."
+            )
+            summary["skipped"] += 1
+            _mark_checked_no_reply(pitch, db)
+            continue
+
+        try:
+            result = check_reply_for_contact(
+                profile_url=contact.profile_url,
+                contact_name=contact.name or "Unknown",
+                db=db,
+                delivered_at=pitch.delivered_at,
+                profile_id=profile_id,
+            )
+        except LinkedInSessionExpiredError:
+            summary["session_error"] = True
+            logger.info(
+                "[FOLLOWUP CHECK] ⛔ LinkedIn session expired — stopping follow-up check.\n"
+                "  Re-authenticate: python app/scraper/linkdin/save_state.py"
+            )
+            break
+        except Exception as exc:
+            logger.error(
+                f"[FOLLOWUP CHECK] ❌ Unexpected error for pitch {pitch.id}: {exc}"
+            )
+            _mark_checked_no_reply(pitch, db)
+            summary["no_change"] += 1
+            time.sleep(cfg["delay_between"])
+            continue
+
+        scraped_messages: list[dict] = result.get("chat_history") or []
+
+        # ── Find NEW inbound messages not yet in DB ───────────────────────────
+        existing_bodies = {
+            row.message_body
+            for row in db.query(ClientChatMessage).filter(
+                ClientChatMessage.sales_pitch_id == pitch.id,
+                ClientChatMessage.is_self == False,  # noqa: E712
+            ).all()
+        }
+
+        new_inbound = [
+            m for m in scraped_messages
+            if not m.get("is_self")
+            and (m.get("body") or "").strip()
+            and (m.get("body") or "").strip() not in existing_bodies
+        ]
+
+        if not new_inbound:
+            _mark_checked_no_reply(pitch, db)
+            summary["no_change"] += 1
+            logger.info(
+                f"[FOLLOWUP CHECK] ℹ️   No new messages — pitch {pitch.id} ({contact.name})"
+            )
+            time.sleep(cfg["delay_between"])
+            continue
+
+        # ── New message(s) found — run the full pipeline ──────────────────────
+        logger.info(
+            f"[FOLLOWUP CHECK] 🎉 {len(new_inbound)} new message(s) from {contact.name!r} "
+            f"on pitch {pitch.id}"
+        )
+        summary["new_replies"] += 1
+
+        company_name = ""
+        if pitch.business_client_id:
+            client = (
+                db.query(Business_Client)
+                .filter(Business_Client.id == pitch.business_client_id)
+                .first()
+            )
+            company_name = client.name if client else ""
+
+        # Generate LLM suggestion based on full (old + new) history
+        suggested_reply = generate_suggested_reply(
+            contact_name=contact.name or "Unknown",
+            company_name=company_name,
+            pitch_context=pitch.pitch_body or "",
+            messages=scraped_messages,
+        )
+
+        # Send Telegram notification and capture chat_id
+        telegram_chat_id = notify_reply_received(
+            contact_name=contact.name or "Unknown",
+            company_name=company_name,
+            reply_snippet=(new_inbound[-1].get("body") or ""),
+            profile_id=profile_id,
+            suggested_reply=suggested_reply,
+            sales_pitch_id=pitch.id,
+        )
+
+        # Persist all messages (de-duplicated inside _sync_chat_history)
+        _sync_chat_history(
+            pitch=pitch,
+            contact=contact,
+            profile_id=profile_id,
+            messages=scraped_messages,
+            suggested_reply=suggested_reply,
+            telegram_chat_id=telegram_chat_id,
+            db=db,
+        )
+
+        # Update the pitch timestamp so this pitch isn't re-checked immediately
+        _mark_checked_no_reply(pitch, db)
+
+        # Auto-send follow-up reply if enabled
+        if suggested_reply:
+            _auto_send_reply(
+                pitch=pitch,
+                contact=contact,
+                profile_id=profile_id,
+                suggested_reply=suggested_reply,
+                db=db,
+            )
+
+        time.sleep(cfg["delay_between"])
+
+    logger.info(
+        f"[FOLLOWUP CHECK] ✅ Done — "
+        f"checked: {summary['checked']} | "
+        f"new_replies: {summary['new_replies']} | "
+        f"no_change: {summary['no_change']} | "
+        f"skipped: {summary['skipped']}"
+    )
+    return summary
+
+
+def run_followup_reply_check_job(profile_id: int = 1) -> None:
+    """Sync entry point called by APScheduler (follow-up/conversation checker)."""
+    db = SessionLocal()
+    try:
+        check_followup_replies(db, profile_id=profile_id)
+    except Exception as exc:
+        logger.error(f"[FOLLOWUP CHECK] ❌ Unexpected error in follow-up reply check job: {exc}")
     finally:
         db.close()

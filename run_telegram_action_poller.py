@@ -188,7 +188,6 @@ def _process_action(action: dict, db: Session) -> None:
         chat_msg.status          = "approved" if action_lower in ("yes", "y") else "custom_sent"
         chat_msg.sent_reply_text = text_to_send
 
-        # Record the sent message in chat history
         new_msg = ClientChatMessage(
             profile_id                 = profile_id,
             sales_pitch_id             = pitch.id,
@@ -198,8 +197,12 @@ def _process_action(action: dict, db: Session) -> None:
             message_body               = text_to_send,
             is_self                    = True,
             status                     = "sent",
+            conversation_active        = True,   # ← enables follow-up checking for this thread
         )
         db.add(new_msg)
+
+        pitch.reply_checked_at = datetime.now(timezone.utc)
+
         db.commit()
         logger.info(
             f"[POLLER] ✅ DM sent to {getattr(contact, 'name', 'contact')!r} "

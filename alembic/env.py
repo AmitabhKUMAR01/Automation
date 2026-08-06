@@ -15,7 +15,7 @@ import app.models.profile_setting
 import app.models.scheduler_job_run
 import app.models.linkedin_search_config
 import app.models.linkedin_search_contact
-import app.models.telegram_pending_action   # registers telegram_pending_actions with Base.metadata
+import app.models.client_chat_message       # registers client_chat_messages with Base.metadata
 from app.config.database import Base
 import os
 import sys

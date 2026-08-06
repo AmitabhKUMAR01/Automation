@@ -36,6 +36,8 @@ class ClientChatMessage(Base):
     status = Column(String(50), nullable=True, default="received", index=True)
     sent_reply_text = Column(Text, nullable=True)     # Actual text sent back to client
 
+    conversation_active = Column(Boolean, default=False, nullable=False)
+
     created_at = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -11,7 +11,7 @@ from app.services.website_audit_service import run_audit_job
 from app.services.lead_scoring_service import run_lead_score_job
 from app.services.linkedin_service import run_linkedin_batch_job, run_linkedin_daily_connections, run_linkedin_acceptance_check, run_linkedin_search_and_connect
 from app.services.pitch_delivery_service import run_pitch_delivery_job
-from app.services.pitch_reply_service import run_pitch_reply_check_job
+from app.services.pitch_reply_service import run_pitch_reply_check_job, run_followup_reply_check_job
 from datetime import datetime, timezone, timedelta
 from app.models.profile_setting import ProfileSetting
 from app.models.scheduler_job_run import SchedulerJobRun
@@ -121,6 +121,10 @@ def scheduled_pitch_delivery():
 
 def scheduled_pitch_reply_check():
     _run_job_for_profiles("daily_pitch_reply_check", run_pitch_reply_check_job)
+
+
+def scheduled_followup_reply_check():
+    _run_job_for_profiles("daily_pitch_reply_check", run_followup_reply_check_job)
 
 
 def scheduled_telegram_action_poll():
@@ -424,6 +428,23 @@ def schedule_jobs():
         jitter=45,
     )
     logger.info(f"[SCHEDULER] Pitch reply check job scheduled every {reply_interval_hours} minute(s).")
+
+    followup_interval_hours = int(os.getenv("FOLLOWUP_REPLY_CHECK_INTERVAL_HOURS", str(reply_interval_hours)))
+    _scheduler.add_job(
+        make_tracked_job(
+            scheduled_followup_reply_check,
+            job_id="periodic_followup_reply_check",
+            job_name="Follow-up Reply Check",
+            max_retries=1,
+            retry_delay_sec=linkedin_retry_delay,
+        ),
+        "interval",
+        minutes=followup_interval_hours,
+        id="periodic_followup_reply_check",
+        replace_existing=True,
+        jitter=60,
+    )
+    logger.info(f"[SCHEDULER] Follow-up reply check job scheduled every {followup_interval_hours} minute(s).")
 
     # ---- Telegram Action Poller (polls bridge API for pending actions) ----
     telegram_poll_interval_sec = int(os.getenv("TELEGRAM_POLLER_INTERVAL_SEC", "60"))

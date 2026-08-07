@@ -271,7 +271,7 @@ def _fetch_checkable_pitches(
 
 
 def _fetch_active_conversation_pitches(
-    db: Session, recheck_hours: int, max_per_run: int
+    db: Session, recheck_hours: int, max_per_run: int, profile_id: int | None = None
 ) -> list[SalesPitch]:
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=recheck_hours)
@@ -286,7 +286,7 @@ def _fetch_active_conversation_pitches(
         else_=1,
     )
 
-    return (
+    query = (
         db.query(SalesPitch)
         .filter(
             SalesPitch.pitch_channel == "linkedin",
@@ -298,6 +298,32 @@ def _fetch_active_conversation_pitches(
                 | (SalesPitch.reply_checked_at < cutoff)
             ),
         )
+    )
+
+    # Scope to pitches whose contact belongs to the requested profile.
+    # LinkedinSearchContact carries a profile_id; LinkedinContact does not,
+    # so we only restrict when the pitch has a linkedin_search_contact_id.
+    if profile_id is not None:
+        query = query.filter(
+            (
+                # Search-contact pitch: must match the running profile
+                SalesPitch.linkedin_search_contact_id.isnot(None)
+                & SalesPitch.linkedin_search_contact_id.in_(
+                    db.query(LinkedinSearchContact.id).filter(
+                        LinkedinSearchContact.profile_id == profile_id
+                    )
+                )
+            )
+            | (
+                # Client-contact pitch: no profile_id column on the contact table,
+                # include all so they are not silently dropped.
+                SalesPitch.linkedin_contact_id.isnot(None)
+                & SalesPitch.linkedin_search_contact_id.is_(None)
+            )
+        )
+
+    return (
+        query
         .order_by(null_priority, SalesPitch.reply_checked_at.asc())
         .limit(max_per_run)
         .all()
@@ -710,7 +736,7 @@ def check_followup_replies(db: Session, profile_id: int = 1) -> dict:
     }
 
     pitches = _fetch_active_conversation_pitches(
-        db, cfg["recheck_hours"], cfg["max_per_run"]
+        db, cfg["recheck_hours"], cfg["max_per_run"], profile_id=profile_id
     )
 
     if not pitches:

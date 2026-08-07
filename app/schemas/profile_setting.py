@@ -8,7 +8,8 @@ VALID_PROCESSES = {
     "daily_linkedin_connections",
     "daily_linkedin_acceptance_check",
     "daily_pitch_delivery",
-    "daily_pitch_reply_check"
+    "daily_pitch_reply_check",
+    "daily_followup_reply_check",
 }
 
 def check_allowed_processes(v: Optional[str]) -> Optional[str]:

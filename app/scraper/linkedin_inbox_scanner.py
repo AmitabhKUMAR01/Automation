@@ -83,6 +83,16 @@ def _parse_conversation_cards(page, max_cards: int = 100) -> list[dict]:
                 "card_index": i,
             }
 
+            # ── Dump raw HTML of first 3 cards for debugging ─────────────────
+            if i < 3:
+                try:
+                    raw_html = card.inner_html()
+                    logger.info(
+                        f"[INBOX SCAN] 🔎 Card[{i}] HTML: {raw_html[:800]!r}"
+                    )
+                except Exception:
+                    pass
+
             # ── Check for unread indicator ────────────────────────────────────
             card_classes = card.get_attribute("class") or ""
             if "unread" in card_classes.lower():
@@ -96,15 +106,33 @@ def _parse_conversation_cards(page, max_cards: int = 100) -> list[dict]:
                     "[class*='unread']",
                     "span[class*='notification-badge']",
                     ".msg-conversation-card__unread-count",
+                    # aria-label based (LinkedIn accessibility attributes)
+                    "[aria-label*='unread']",
+                    "[aria-label*='new message']",
+                    # NOTE: [class*='badge'] and [class*='indicator'] intentionally
+                    # excluded — they match delivery/read icons on EVERY card
                 ]
                 for usel in unread_selectors:
                     try:
                         unread_el = card.locator(usel)
                         if unread_el.count() > 0:
                             entry["has_unread"] = True
+                            logger.info(
+                                f"[INBOX SCAN] 🔍 Card[{i}] unread matched via selector: {usel!r}"
+                            )
                             break
                     except Exception:
                         continue
+
+            # Also check aria-label on the card itself for unread signal
+            if not entry["has_unread"]:
+                try:
+                    aria = card.get_attribute("aria-label") or ""
+                    if "unread" in aria.lower() or "new" in aria.lower():
+                        entry["has_unread"] = True
+                        logger.info(f"[INBOX SCAN] 🔍 Card[{i}] unread via aria-label: {aria!r}")
+                except Exception:
+                    pass
 
             # Also check if the title text is bold (LinkedIn uses font-weight
             # for unread conversations)
@@ -118,9 +146,50 @@ def _parse_conversation_cards(page, max_cards: int = 100) -> list[dict]:
                         font_weight = title_el.evaluate(
                             "el => window.getComputedStyle(el).fontWeight"
                         )
-                        # font-weight >= 600 typically means bold/semibold
                         if font_weight and int(font_weight) >= 600:
                             entry["has_unread"] = True
+                            logger.info(
+                                f"[INBOX SCAN] 🔍 Card[{i}] unread via font-weight={font_weight}"
+                            )
+                except Exception:
+                    pass
+
+            # Also detect via <strong> tag in title (some LinkedIn UI versions)
+            if not entry["has_unread"]:
+                try:
+                    strong_el = card.locator("strong")
+                    if strong_el.count() > 0:
+                        entry["has_unread"] = True
+                        logger.info(f"[INBOX SCAN] 🔍 Card[{i}] unread via <strong> tag")
+                except Exception:
+                    pass
+
+            # Sender-prefix fallback: if the preview starts with a non-'You' prefix,
+            # the last message was inbound — treat as potentially unread.
+            # This is a last-resort that catches LinkedIn UI versions that don't
+            # mark cards visually but still show the sender name in the snippet.
+            if not entry["has_unread"]:
+                try:
+                    preview_el_text = ""
+                    for psel in [
+                        "p.msg-conversation-card__message-snippet",
+                        "p[class*='msg-conversation-card__message-snippet']",
+                        "[class*='message-snippet']",
+                    ]:
+                        try:
+                            pel = card.locator(psel).first
+                            if pel.count() > 0:
+                                preview_el_text = pel.inner_text().strip()
+                                break
+                        except Exception:
+                            continue
+                    # LinkedIn prefixes self-messages with "You: "
+                    # If there's text and it does NOT start with 'You:', it's inbound.
+                    if preview_el_text and not preview_el_text.lower().startswith("you:"):
+                        entry["has_unread"] = True
+                        logger.info(
+                            f"[INBOX SCAN] 🔍 Card[{i}] unread via inbound-preview fallback: {preview_el_text[:60]!r}"
+                        )
                 except Exception:
                     pass
 
@@ -150,7 +219,11 @@ def _parse_conversation_cards(page, max_cards: int = 100) -> list[dict]:
                     continue
 
             # ── Extract profile slug from any /in/ link ───────────────────────
+            # LinkedIn's current messaging UI often embeds the contact profile
+            # URL in data attributes rather than plain <a href>. Try multiple
+            # extraction strategies in order.
             try:
+                # Strategy 1: direct <a href="/in/..."> inside the card
                 links = card.locator("a[href*='/in/']")
                 for li in range(links.count()):
                     href = links.nth(li).get_attribute("href") or ""
@@ -160,6 +233,42 @@ def _parse_conversation_cards(page, max_cards: int = 100) -> list[dict]:
                         break
             except Exception:
                 pass
+
+            if not entry["profile_slug"]:
+                try:
+                    # Strategy 2: data-entity-urn attribute on the card or its children
+                    # e.g. urn:li:member:12345 — not a slug, but we can also try:
+                    # the card's own href (clicking the card navigates to the thread)
+                    card_link = card.locator("a").first
+                    if card_link.count() > 0:
+                        href = card_link.get_attribute("href") or ""
+                        slug = _extract_slug_from_href(href)
+                        if slug:
+                            entry["profile_slug"] = slug
+                except Exception:
+                    pass
+
+            if not entry["profile_slug"]:
+                try:
+                    # Strategy 3: any element with a data-* attribute containing /in/
+                    # LinkedIn sometimes stores profile URLs in data-entity-url
+                    for attr_sel in [
+                        "[data-entity-url*='/in/']",
+                        "[data-url*='/in/']",
+                        "[data-href*='/in/']",
+                    ]:
+                        el = card.locator(attr_sel)
+                        if el.count() > 0:
+                            for attr in ["data-entity-url", "data-url", "data-href", "href"]:
+                                val = el.first.get_attribute(attr) or ""
+                                slug = _extract_slug_from_href(val)
+                                if slug:
+                                    entry["profile_slug"] = slug
+                                    break
+                        if entry["profile_slug"]:
+                            break
+                except Exception:
+                    pass
 
             # ── Extract message preview snippet ───────────────────────────────
             preview_selectors = [

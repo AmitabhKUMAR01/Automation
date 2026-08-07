@@ -124,7 +124,7 @@ def scheduled_pitch_reply_check():
 
 
 def scheduled_followup_reply_check():
-    _run_job_for_profiles("daily_pitch_reply_check", run_followup_reply_check_job)
+    _run_job_for_profiles("daily_followup_reply_check", run_followup_reply_check_job)
 
 
 def scheduled_telegram_action_poll():

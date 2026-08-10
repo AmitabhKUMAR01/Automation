@@ -273,7 +273,16 @@ def _fetch_checkable_pitches(
 def _fetch_active_conversation_pitches(
     db: Session, recheck_hours: int, max_per_run: int, profile_id: int | None = None
 ) -> list[SalesPitch]:
+    """
+    Fetch pitches eligible for the follow-up reply checker.
 
+    Includes two categories:
+    1. Normal follow-up: pitch was sent (delivery_status='sent', reply_received=True)
+       and there is an active ClientChatMessage thread.
+    2. Inbound-first: contact messaged us before we pitched (delivery_status='inbound_first')
+       and there is an active ClientChatMessage thread.
+    Both categories are checked for new messages on the same interval.
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=recheck_hours)
 
     has_active_msg = exists().where(
@@ -290,8 +299,11 @@ def _fetch_active_conversation_pitches(
         db.query(SalesPitch)
         .filter(
             SalesPitch.pitch_channel == "linkedin",
-            SalesPitch.delivery_status == "sent",
-            SalesPitch.reply_received == True,  # noqa: E712
+            # Include pitches that had a first reply OR inbound-first contacts
+            (
+                (SalesPitch.delivery_status == "sent") & (SalesPitch.reply_received == True)  # noqa: E712
+                | (SalesPitch.delivery_status == "inbound_first")
+            ),
             has_active_msg,
             (
                 SalesPitch.reply_checked_at.is_(None)

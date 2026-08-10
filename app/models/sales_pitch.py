@@ -39,7 +39,12 @@ class SalesPitch(Base):
     created_at   = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # ---------- Delivery Tracking ----------
-    # "pending" | "sent" | "failed" | "skipped"
+    # "pending"       — not yet sent, will be delivered by pitch_delivery job
+    # "sent"          — successfully delivered via LinkedIn DM or email
+    # "failed"        — delivery attempted but failed (retry eligible)
+    # "skipped"       — permanently skipped (no contact, no channel, etc.)
+    # "inbound_first" — contact messaged us BEFORE pitch delivery; pitch job skips these;
+    #                   follow-up reply check handles the ongoing conversation instead
     delivery_status   = Column(String(20), nullable=True, default="pending")
     delivered_at      = Column(DateTime(timezone=True), nullable=True)
     delivery_error    = Column(Text, nullable=True)   # last error message

@@ -19,6 +19,8 @@ from app.models.linkedin_search_contact import LinkedinSearchContact
 from app.models.business_client import Business_Client
 from app.models.linkedin_search_config import LinkedinSearchConfig
 from app.models.profile_setting import ProfileSetting
+from app.scraper.linkedin_inbox_scanner import scan_inbox
+from app.services.inbound_first_handler import handle_inbound_first_contacts
 
 MAX_CONCURRENT_PROFILES = int(os.getenv("MAX_CONCURRENT_PROFILES", "1"))
 _linkedin_semaphore = threading.BoundedSemaphore(MAX_CONCURRENT_PROFILES)
@@ -224,7 +226,11 @@ def run_linkedin_acceptance_check(profile_id: int = 1) -> None:
             f"[LINKEDIN ACCEPTANCE] Done — checked={result['checked']}, "
             f"newly_accepted={result['newly_accepted']}, names={result['names']}"
         )
-        # Notify for each newly accepted connection
+
+        # ── Build list of newly-accepted contact objects ───────────────────────
+        # Used both for notifications AND for the inbound-first check below.
+        newly_accepted_contacts: list[tuple] = []
+
         for name in result.get("names", []):
             # Look up the contact record so we can include profile_url in the alert
             contact_record = (
@@ -241,6 +247,7 @@ def run_linkedin_acceptance_check(profile_id: int = 1) -> None:
                     Business_Client.id == contact_record.business_client_id
                 ).first()
                 company_name = client.name if client else ""
+                newly_accepted_contacts.append((contact_record, "LinkedinContact"))
             else:
                 # Try search contacts
                 search_record = (
@@ -253,6 +260,7 @@ def run_linkedin_acceptance_check(profile_id: int = 1) -> None:
                     profile_url = search_record.profile_url or ""
                     # Position or Location could be company name fallback, or empty
                     company_name = search_record.location or ""
+                    newly_accepted_contacts.append((search_record, "LinkedinSearchContact"))
 
             notify_connection_accepted(
                 contact_name = name,
@@ -260,6 +268,53 @@ def run_linkedin_acceptance_check(profile_id: int = 1) -> None:
                 company_name = company_name,
                 profile_name = profile_name,
             )
+
+        # ── Inbound-First Check ───────────────────────────────────────────────
+        # If any newly-accepted contacts already sent us a message, handle them
+        # before the pitch delivery job runs, so we don't pitch someone who
+        # already broke the ice.
+        if newly_accepted_contacts:
+            logger.info(
+                f"[LINKEDIN ACCEPTANCE] 📬 Running inbound-first check for "
+                f"{len(newly_accepted_contacts)} newly-accepted contact(s)…"
+            )
+            try:
+                inbox_result = scan_inbox(
+                    db=db,
+                    profile_id=profile_id,
+                    max_scroll=int(os.getenv("INBOX_MAX_SCROLL", "3")),
+                )
+                if inbox_result["success"]:
+                    handled = handle_inbound_first_contacts(
+                        newly_accepted_contacts=newly_accepted_contacts,
+                        inbox_scan_result=inbox_result,
+                        profile_id=profile_id,
+                        db=db,
+                    )
+                    logger.info(
+                        f"[LINKEDIN ACCEPTANCE] ✅ Inbound-first check complete — "
+                        f"{handled} contact(s) handled as inbound-first."
+                    )
+                else:
+                    logger.warning(
+                        f"[LINKEDIN ACCEPTANCE] ⚠️  Inbox scan failed "
+                        f"({inbox_result.get('error')}) — inbound-first check skipped."
+                    )
+            except LinkedInSessionExpiredError:
+                logger.error(
+                    "[LINKEDIN ACCEPTANCE] ⛔ Session expired during inbound-first "
+                    "inbox scan — skipping inbound-first detection this run."
+                )
+            except Exception as exc:
+                logger.error(
+                    f"[LINKEDIN ACCEPTANCE] ❌ Unexpected error in inbound-first check: {exc}"
+                )
+        else:
+            logger.info(
+                "[LINKEDIN ACCEPTANCE] ℹ️  No newly-accepted contacts — "
+                "inbound-first check not needed."
+            )
+
     except Exception as exc:
         logger.info(f"[LINKEDIN ACCEPTANCE] Unexpected error: {exc}")
     finally:

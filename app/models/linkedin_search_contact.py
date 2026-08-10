@@ -40,6 +40,9 @@ class LinkedinSearchContact(Base):
     is_connected = Column(Boolean, default=False, nullable=False)
     connected_at = Column(DateTime(timezone=True), nullable=True)
 
+
+    contact_messaged_first = Column(Boolean, default=False, nullable=False)
+
     # Profile that sent this connection
     profile_id = Column(Integer, nullable=True)
 

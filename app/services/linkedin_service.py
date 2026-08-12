@@ -3,6 +3,7 @@ from app.services.notification_service import notify_connection_accepted, notify
 import threading
 import time
 import os
+from datetime import datetime, timezone, timedelta
 from typing import cast
 from sqlalchemy.orm import Session
 from app.config.database import SessionLocal
@@ -388,6 +389,24 @@ def run_linkedin_search_and_connect(profile_id: int = 1) -> None:
                 "[LINKEDIN SEARCH JOB] ⚠️  Session expired. "
                 "Re-run save_state.py to refresh the session."
             )
+
+        # ── Weekly limit hit: suspend search job for this profile until Monday ──
+        if result.get("weekly_limit_reached"):
+            now = datetime.now(timezone.utc)
+            # days_until_monday: 0 if today is Monday → force at least 1 day ahead
+            days_ahead = (7 - now.weekday()) % 7 or 7
+            reset_at = (now + timedelta(days=days_ahead)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            profile_row = db.query(ProfileSetting).filter(ProfileSetting.id == profile_id).first()
+            if profile_row:
+                profile_row.weekly_limit_reached_at = now
+                profile_row.weekly_limit_resets_at  = reset_at
+                db.commit()
+                logger.warning(
+                    f"[LINKEDIN SEARCH JOB] ⛔ Weekly limit persisted for Profile {profile_id}. "
+                    f"Search job suspended until {reset_at.strftime('%A %Y-%m-%d %H:%M UTC')}."
+                )
 
     except Exception as exc:
         logger.error(f"[LINKEDIN SEARCH JOB] Unexpected error: {exc}")

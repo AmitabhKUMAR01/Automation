@@ -25,7 +25,14 @@ class ProfileSetting(Base):
     # Status
     is_active = Column(Boolean, default=True)
     last_used_at = Column(DateTime, nullable=True)
-    
+
+    # LinkedIn weekly invite limit tracking
+    # NULL = not currently blocked. Set when LinkedIn's weekly cap is hit for this profile.
+    # The scheduler skips daily_linkedin_search for this profile until weekly_limit_resets_at.
+    # Both columns are auto-cleared to NULL once weekly_limit_resets_at has passed.
+    weekly_limit_reached_at = Column(DateTime, nullable=True)
+    weekly_limit_resets_at  = Column(DateTime, nullable=True)
+
     # Timestamps
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())

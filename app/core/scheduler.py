@@ -93,6 +93,34 @@ def _run_job_for_profiles(job_name: str, func, single_profile_per_run: bool = Fa
                 allowed = []
             
             if job_name in allowed:
+                # ── Weekly invite limit gate (only for the search+connect job) ──
+                if job_name == "daily_linkedin_search":
+                    now = datetime.now(timezone.utc)
+                    if (
+                        profile.weekly_limit_reached_at
+                        and profile.weekly_limit_resets_at
+                        and now < profile.weekly_limit_resets_at
+                    ):
+                        logger.info(
+                            f"[SCHEDULER] ⏸ Skipping {job_name} for Profile {profile.id} "
+                            f"({profile.name}) — weekly invite limit active until "
+                            f"{profile.weekly_limit_resets_at.strftime('%A %Y-%m-%d %H:%M UTC')}"
+                        )
+                        continue  # skip this profile, move to next
+
+                    # Auto-clear once the reset time has passed
+                    if (
+                        profile.weekly_limit_resets_at
+                        and now >= profile.weekly_limit_resets_at
+                    ):
+                        profile.weekly_limit_reached_at = None
+                        profile.weekly_limit_resets_at  = None
+                        db.commit()
+                        logger.info(
+                            f"[SCHEDULER] ✅ Weekly invite limit cleared for Profile {profile.id} "
+                            f"({profile.name}) — resuming {job_name}."
+                        )
+
                 logger.info(f"[SCHEDULER] Running {job_name} for Profile {profile.id} ({profile.name})")
                 func(profile_id=profile.id)
                 profile.last_used_at = datetime.now(timezone.utc)

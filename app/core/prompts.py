@@ -95,7 +95,7 @@ FULL CHAT HISTORY (in chronological order):
 {chat_history_text}
 
 TASK:
-Analyze the conversation trajectory above and generate a natural, conversational, professional 1-3 sentence LinkedIn DM reply to respond to {contact_name}'s latest message.
+Analyze the conversation trajectory above. Count the number of prior exchanges — if there are already multiple back-and-forth messages, this is an ongoing conversation and you must NOT open with a greeting like "Hi {contact_name},". Instead, reply naturally as if continuing the chat thread. Only use a greeting on the very first reply (when the chat history has only the initial pitch and one inbound message). Generate a professional 1-3 sentence LinkedIn DM reply to {contact_name}'s latest message.
 
 OUTPUT FORMAT (strict JSON, no markdown):
 {{
@@ -103,7 +103,7 @@ OUTPUT FORMAT (strict JSON, no markdown):
 }}
 
 Rules:
-- Address {contact_name} by FIRST NAME
+- ONLY greet {contact_name} by name (e.g. "Hi {contact_name},") if this is the very first reply in the conversation. For all subsequent messages, skip the greeting entirely and dive straight into the response.
 - Directly answer or acknowledge their latest message while taking the conversation forward
 - Keep it brief (20-60 words), human, and helpful — no hard sales push or pushiness
 - Sound like a real colleague/consultant sending a quick message

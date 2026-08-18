@@ -7,7 +7,11 @@ class ProfileSetting(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), unique=True, index=True, nullable=False)
-    
+
+    # Per-profile LinkedIn search location (e.g. "Bahrain", "Dubai").
+    # If NULL, falls back to the global LinkedinSearchConfig.location.
+    location = Column(String(255), nullable=True)
+
     # Limits
     max_connections_per_day = Column(Integer, default=20)
     max_messages_per_day = Column(Integer, default=15)

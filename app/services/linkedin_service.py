@@ -347,7 +347,7 @@ def run_linkedin_search_and_connect(profile_id: int = 1) -> None:
 
     db = SessionLocal()
     try:
-        # Load the active search config
+        # Load the active search config (positions, global location, schedule)
         config = (
             db.query(LinkedinSearchConfig)
             .filter(LinkedinSearchConfig.is_active == True)  # noqa: E712
@@ -359,15 +359,20 @@ def run_linkedin_search_and_connect(profile_id: int = 1) -> None:
             return
 
         positions = config.positions or []
-        location  = config.location  or "Bahrain"
 
         if not positions:
             logger.info("[LINKEDIN SEARCH JOB] No positions configured — skipping.")
             return
 
+        # Resolve location: per-profile setting takes priority over global config
+        profile_row = db.query(ProfileSetting).filter(ProfileSetting.id == profile_id).first()
+        profile_location = profile_row.location if (profile_row and profile_row.location) else None
+        location = profile_location or config.location or "Bahrain"
+
         logger.info(
             f"[LINKEDIN SEARCH JOB] 🚀 Starting for Profile {profile_id} | "
             f"Positions: {positions} | Location: {location}"
+            + (f" (profile override)" if profile_location else f" (global config)")
         )
 
         result = run_linkedin_search_and_send_connections(
@@ -398,7 +403,7 @@ def run_linkedin_search_and_connect(profile_id: int = 1) -> None:
             reset_at = (now + timedelta(days=days_ahead)).replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
-            profile_row = db.query(ProfileSetting).filter(ProfileSetting.id == profile_id).first()
+            # profile_row already fetched above for location resolution
             if profile_row:
                 profile_row.weekly_limit_reached_at = now
                 profile_row.weekly_limit_resets_at  = reset_at

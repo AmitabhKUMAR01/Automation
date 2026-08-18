@@ -106,7 +106,6 @@ class TelegramNotificationChannel(NotificationChannel):
         company_name: str,
         profile_name: str = "",
     ) -> None:
-        url_str = str(profile_url or "").strip()
         _post(
             {
                 **_build_base("connection_accepted"),
@@ -114,10 +113,8 @@ class TelegramNotificationChannel(NotificationChannel):
                 "action_id_name": profile_name,  # which LinkedIn account took the action
                 "contact_name": contact_name,
                 "contact_company": company_name,
-                "contact_profile_url": url_str,
                 "message": (
-                    f"🤝 LinkedIn connection accepted: *{contact_name}* ({company_name})\n"
-                    f"{url_str}"
+                    f"🤝 LinkedIn connection accepted: *{contact_name}* ({company_name})"
                     + (f"\nAccount: {profile_name}" if profile_name else "")
                 ),
             }

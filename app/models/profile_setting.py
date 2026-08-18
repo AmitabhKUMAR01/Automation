@@ -7,9 +7,6 @@ class ProfileSetting(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), unique=True, index=True, nullable=False)
-
-    # Per-profile LinkedIn search location (e.g. "Bahrain", "Dubai").
-    # If NULL, falls back to the global LinkedinSearchConfig.location.
     location = Column(String(255), nullable=True)
 
     # Limits
@@ -17,23 +14,19 @@ class ProfileSetting(Base):
     max_messages_per_day = Column(Integer, default=15)
     
     # Configuration
-    # Store as a JSON string list like: ["daily_linkedin_search", "daily_linkedin_connections"]
     allowed_processes = Column(Text, default="[]")
     
     # 'new' or 'old' to dictate different behaviors/delays
     profile_type = Column(String(50), default="old")
     
-    # Playwright session state JSON dictionary dumped as string
     session_state = Column(Text, nullable=True)
     
-    # Status
     is_active = Column(Boolean, default=True)
     last_used_at = Column(DateTime, nullable=True)
 
-    # LinkedIn weekly invite limit tracking
-    # NULL = not currently blocked. Set when LinkedIn's weekly cap is hit for this profile.
-    # The scheduler skips daily_linkedin_search for this profile until weekly_limit_resets_at.
-    # Both columns are auto-cleared to NULL once weekly_limit_resets_at has passed.
+    last_search_used_at = Column(DateTime, nullable=True)
+
+ 
     weekly_limit_reached_at = Column(DateTime, nullable=True)
     weekly_limit_resets_at  = Column(DateTime, nullable=True)
 

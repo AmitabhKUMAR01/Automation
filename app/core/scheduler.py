@@ -80,10 +80,13 @@ def run_next_job():
 def _run_job_for_profiles(job_name: str, func, single_profile_per_run: bool = False):
     db = SessionLocal()
     try:
+        is_search_job = job_name == "daily_linkedin_search"
+        order_col = ProfileSetting.last_search_used_at if is_search_job else ProfileSetting.last_used_at
+
         profiles = (
             db.query(ProfileSetting)
             .filter(ProfileSetting.is_active == True)
-            .order_by(ProfileSetting.last_used_at.asc())
+            .order_by(order_col.asc())
             .all()
         )
         for profile in profiles:
@@ -94,7 +97,7 @@ def _run_job_for_profiles(job_name: str, func, single_profile_per_run: bool = Fa
             
             if job_name in allowed:
                 # ── Weekly invite limit gate (only for the search+connect job) ──
-                if job_name == "daily_linkedin_search":
+                if is_search_job:
                     now = datetime.now(timezone.utc)
                     if (
                         profile.weekly_limit_reached_at
@@ -123,8 +126,15 @@ def _run_job_for_profiles(job_name: str, func, single_profile_per_run: bool = Fa
 
                 logger.info(f"[SCHEDULER] Running {job_name} for Profile {profile.id} ({profile.name})")
                 func(profile_id=profile.id)
-                profile.last_used_at = datetime.now(timezone.utc)
+
+                # Update the correct rotation timestamp
+                now_ts = datetime.now(timezone.utc)
+                if is_search_job:
+                    profile.last_search_used_at = now_ts
+                else:
+                    profile.last_used_at = now_ts
                 db.commit()
+
                 if single_profile_per_run:
                     logger.info(f"[SCHEDULER] Single profile mode active for {job_name} — stopping after Profile {profile.id} ({profile.name})")
                     break

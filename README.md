@@ -131,6 +131,30 @@ fastapi dev main.py
 
 The scheduler will automatically start and run jobs at the configured times in the background.
 
+## Running the Frontend
+
+The project includes a TypeScript-based web user interface located in the `frontend` folder.
+
+1. **Navigate to the frontend directory**:
+   ```bash
+   cd frontend
+   ```
+
+2. **Install frontend dependencies**:
+   ```bash
+   npm install
+   ```
+
+3. **Start the development server**:
+   ```bash
+   npm run dev
+   ```
+
+4. **Build for production** (optional):
+   ```bash
+   npm run build
+   ```
+
 ## API Documentation
 
 - **Swagger UI**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)

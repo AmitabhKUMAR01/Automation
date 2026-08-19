@@ -21,3 +21,39 @@ pyrefly.toml
 
 # Playwright session state (contains sensitive cookies!)
 storage_state.json
+
+# Frontend
+frontend/**/*.log
+frontend/**/npm-debug.log*
+frontend/**/yarn-debug.log*
+frontend/**/yarn-error.log*
+frontend/**/pnpm-debug.log*
+frontend/**/lerna-debug.log*
+
+frontend/node_modules
+frontend/dist
+frontend/dist-ssr
+frontend/.output
+frontend/.vinxi
+frontend/.tanstack/**
+frontend/.nitro
+frontend/*.local
+
+# Frontend Wrangler / Cloudflare
+frontend/.wrangler/
+frontend/.dev.vars
+
+# Frontend Editor directories and files
+frontend/.vscode/*
+!frontend/.vscode/extensions.json
+frontend/.idea
+frontend/*.suo
+frontend/*.ntvs*
+frontend/*.njsproj
+frontend/*.sln
+frontend/*.sw?
+
+
+
+
+

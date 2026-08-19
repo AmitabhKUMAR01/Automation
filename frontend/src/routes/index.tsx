@@ -16,7 +16,7 @@ import { SegmentPerformanceTable } from "@/components/dashboard/SegmentPerforman
 import { OverallConversion } from "@/components/dashboard/OverallConversion";
 import { ErrorState } from "@/components/dashboard/primitives";
 import { dashboardQueryOptions } from "@/lib/analytics/api";
-import { defaultFilters, type AnalyticsFilters } from "@/lib/analytics/types";
+import { defaultFilters, type AnalyticsFilters, type KpiSet } from "@/lib/analytics/types";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -43,6 +43,33 @@ function DashboardPage() {
   const query = useQuery(dashboardQueryOptions(filters));
   const { data, isPending, isFetching, isError, error, refetch } = query;
 
+  const kpisQuery = useQuery({
+    queryKey: ["profile-kpis", filters] as const,
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (filters.profileId) params.set("profileId", filters.profileId);
+      if (filters.timeframe) params.set("timeframe", filters.timeframe);
+      if (filters.position) params.set("position", filters.position);
+      if (filters.location) params.set("location", filters.location);
+      if (filters.jobType) params.set("jobType", filters.jobType);
+      if (filters.jobStatus) params.set("jobStatus", filters.jobStatus);
+      if (filters.profileStatus) params.set("profileStatus", filters.profileStatus);
+
+      const res = await fetch(`/api/profile/kpis?${params.toString()}`);
+      if (!res.ok) throw new Error("Failed to load KPI metrics");
+      const result = await res.json();
+      return result.data.kpis as KpiSet;
+    },
+  });
+
+  const handleRefresh = () => {
+    refetch();
+    kpisQuery.refetch();
+  };
+
+  const isKpisLoading = kpisQuery.isPending;
+  const isKpisFetching = kpisQuery.isFetching;
+
   return (
     <main className="mx-auto w-full max-w-[1400px] px-4 pb-16 pt-6 sm:px-6">
       <header className="mb-5 flex flex-wrap items-center justify-between gap-4">
@@ -58,8 +85,8 @@ function DashboardPage() {
             Connections, conversations and automation health across every connected profile.
           </p>
         </div>
-        <Button variant="outline" onClick={() => refetch()} disabled={isFetching} className="gap-2">
-          {isFetching ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+        <Button variant="outline" onClick={handleRefresh} disabled={isFetching || isKpisFetching} className="gap-2">
+          {isFetching || isKpisFetching ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
           Refresh
         </Button>
       </header>
@@ -67,14 +94,18 @@ function DashboardPage() {
       <FiltersBar filters={filters} onChange={setFilters} />
 
       <div className="mt-5 space-y-5">
-        {isError ? (
+        {isError || kpisQuery.isError ? (
           <ErrorState
-            message={(error as Error)?.message ?? "We couldn't load analytics data."}
-            onRetry={() => refetch()}
+            message={
+              (error as Error)?.message ?? 
+              (kpisQuery.error as Error)?.message ?? 
+              "We couldn't load analytics data."
+            }
+            onRetry={handleRefresh}
           />
         ) : (
           <>
-            <KpiCards kpis={data?.kpis} loading={isPending} />
+            <KpiCards kpis={kpisQuery.data} loading={isKpisLoading} />
 
             {isPending || !data ? (
               <>

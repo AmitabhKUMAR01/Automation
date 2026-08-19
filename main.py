@@ -4,6 +4,7 @@ from app.router import website_audit
 from app.router import lead_score
 from app.router import linkedin_router
 from app.router import profile_setting
+from app.router import profile_router
 from app.core.scheduler import schedule_jobs, get_scheduler
 import app.models.website_audit
 import app.models.lead_score
@@ -17,6 +18,7 @@ app.include_router(website_audit.router)
 app.include_router(lead_score.router)
 app.include_router(linkedin_router.router)
 app.include_router(profile_setting.router)
+app.include_router(profile_router.router)
 
 
 @app.on_event("startup")

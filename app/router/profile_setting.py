@@ -1,10 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Union, Any
+from fastapi.encoders import jsonable_encoder
 
 from app.config.database import get_db
 from app.models.profile_setting import ProfileSetting
 from app.schemas.profile_setting import ProfileSettingCreate, ProfileSettingUpdate, ProfileSettingResponse
+from app.schemas.pagination_schema import PaginationQuery
+from app.utils.response import success, error
+from app.models.linkedin_search_config import LinkedinSearchConfig
+import json
 
 router = APIRouter(prefix="/profile-settings", tags=["Profile Settings"])
 
@@ -20,9 +25,56 @@ def create_profile(profile: ProfileSettingCreate, db: Session = Depends(get_db))
     db.refresh(new_profile)
     return new_profile
 
-@router.get("/", response_model=List[ProfileSettingResponse])
-def get_all_profiles(db: Session = Depends(get_db)):
-    return db.query(ProfileSetting).all()
+@router.get("/", response_model=Union[List[ProfileSettingResponse], Any])
+def get_all_profiles(query: PaginationQuery = Depends(), db: Session = Depends(get_db)):
+    try:
+        base_query = db.query(ProfileSetting)
+        
+        if query.paginate == "true":
+            per_page = query.result_per_page or 10
+            page = query.page or 1
+            
+            total = base_query.count()
+            profiles = base_query.offset((page - 1) * per_page).limit(per_page).all()
+            data = jsonable_encoder([ProfileSettingResponse.model_validate(p) for p in profiles])
+            
+            return success(
+                {
+                    "items": data,
+                    "pagination": {
+                        "total": total,
+                        "per_page": per_page,
+                        "current_page": page,
+                        "last_page": max(1, (total + per_page - 1) // per_page),
+                    }
+                },
+                "Profiles fetched successfully"
+            )
+        else:
+            return base_query.all()
+    except Exception as exc:
+        return error(f"Failed to fetch profiles: {exc}")
+
+@router.get("/positions")
+def get_positions_for_profile(db: Session = Depends(get_db)):
+    try:
+        configs = db.query(LinkedinSearchConfig).all()
+        unique_positions = set()
+        for config in configs:
+            if config.positions:
+                pos_list = config.positions
+                if isinstance(pos_list, str):
+                    try:
+                        pos_list = json.loads(pos_list)
+                    except Exception:
+                        continue
+                if isinstance(pos_list, list):
+                    for p in pos_list:
+                        if isinstance(p, str) and p.strip():
+                            unique_positions.add(p.strip())
+        return success(list(unique_positions), "Positions fetched successfully")
+    except Exception as exc:
+        return error(f"Failed to fetch positions: {exc}")
 
 @router.get("/{profile_id}", response_model=ProfileSettingResponse)
 def get_profile(profile_id: int, db: Session = Depends(get_db)):

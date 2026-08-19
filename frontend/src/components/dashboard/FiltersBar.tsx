@@ -1,4 +1,5 @@
 import { RotateCcw } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 
 import {
   Select,
@@ -60,6 +61,43 @@ export function FiltersBar({
   const set = <K extends keyof AnalyticsFilters>(key: K, value: AnalyticsFilters[K]) =>
     onChange({ ...filters, [key]: value });
 
+  const { data: profilesData } = useQuery({
+    queryKey: ["profiles-settings-list"],
+    queryFn: async () => {
+      const res = await fetch("/api/profile-settings/");
+      if (!res.ok) throw new Error("Failed to fetch profiles");
+      return res.json() as Promise<any[]>;
+    },
+  });
+
+  const activeProfiles = profilesData && Array.isArray(profilesData) && profilesData.length > 0
+    ? profilesData.map((p) => ({ id: String(p.id), name: p.name }))
+    : PROFILES;
+
+  const uniqueLocations = profilesData && Array.isArray(profilesData)
+    ? Array.from(new Set(
+        profilesData
+          .map((p) => p.location)
+          .filter((loc): loc is string => typeof loc === "string" && loc.trim() !== "")
+      ))
+    : [];
+
+  const locationsList = uniqueLocations.length > 0 ? uniqueLocations : LOCATIONS;
+
+  const { data: positionsData } = useQuery({
+    queryKey: ["profiles-positions-list"],
+    queryFn: async () => {
+      const res = await fetch("/api/profile-settings/positions");
+      if (!res.ok) throw new Error("Failed to fetch positions");
+      const json = await res.json();
+      return json.data as string[];
+    },
+  });
+
+  const positionsList = positionsData && Array.isArray(positionsData) && positionsData.length > 0
+    ? positionsData
+    : POSITIONS;
+
   const all = (label: string) => ({ value: "all", label });
 
   return (
@@ -70,19 +108,19 @@ export function FiltersBar({
             label="Profile"
             value={filters.profileId}
             onChange={(v) => set("profileId", v)}
-            options={[all("All profiles"), ...PROFILES.map((p) => ({ value: p.id, label: p.name }))]}
+            options={[all("All profiles"), ...activeProfiles.map((p) => ({ value: p.id, label: p.name }))]}
           />
           <FilterSelect
             label="Position"
             value={filters.position}
             onChange={(v) => set("position", v)}
-            options={[all("All positions"), ...POSITIONS.map((p) => ({ value: p, label: p }))]}
+            options={[all("All positions"), ...positionsList.map((p) => ({ value: p, label: p }))]}
           />
           <FilterSelect
             label="Location"
             value={filters.location}
             onChange={(v) => set("location", v)}
-            options={[all("All locations"), ...LOCATIONS.map((l) => ({ value: l, label: l }))]}
+            options={[all("All locations"), ...locationsList.map((l) => ({ value: l, label: l }))]}
           />
           <FilterSelect
             label="Job Type"

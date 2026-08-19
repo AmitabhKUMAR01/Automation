@@ -33,6 +33,7 @@ class ProfileSettingBase(BaseModel):
     allowed_processes: Optional[str] = "[]"
     profile_type: Optional[str] = "old"
     is_active: Optional[bool] = True
+    location: Optional[str] = ""
 
     @field_validator('allowed_processes')
     @classmethod

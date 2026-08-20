@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -753,3 +753,106 @@ def get_daily(
         return error(str(exc), status_code=400)
     except Exception as exc:
         return error(f"Failed to fetch daily activity: {exc}")
+
+
+def _next_monday() -> datetime:
+    now = datetime.now()
+    days_ahead = 7 - now.weekday()
+    if days_ahead == 0:
+        days_ahead = 7
+    return datetime.combine(now.date() + timedelta(days=days_ahead), time.min)
+
+
+def _build_quota_health(db: Session, profile_status: str = "all") -> list[dict]:
+    # Get all profiles matching status
+    profiles = db.query(ProfileSetting).all()
+    if profile_status != "all":
+        profiles = [
+            p for p in profiles if _infer_profile_status(p) == profile_status
+        ]
+
+    today_start = datetime.combine(datetime.today().date(), time.min)
+    monday_date = datetime.today().date() - timedelta(days=datetime.today().weekday())
+    week_start = datetime.combine(monday_date, time.min)
+
+    results = []
+    for p in profiles:
+        # daily connection usage
+        connections_used = (
+            db.query(func.count(LinkedinSearchContact.id))
+            .filter(
+                LinkedinSearchContact.profile_id == p.id,
+                LinkedinSearchContact.connection_sent.is_(True),
+                LinkedinSearchContact.connection_sent_at >= today_start,
+            )
+            .scalar()
+            or 0
+        )
+
+        # weekly connection usage
+        weekly_used = (
+            db.query(func.count(LinkedinSearchContact.id))
+            .filter(
+                LinkedinSearchContact.profile_id == p.id,
+                LinkedinSearchContact.connection_sent.is_(True),
+                LinkedinSearchContact.connection_sent_at >= week_start,
+            )
+            .scalar()
+            or 0
+        )
+
+        # daily message usage
+        messages_used = (
+            db.query(func.count(SalesPitch.id))
+            .join(
+                LinkedinSearchContact,
+                SalesPitch.linkedin_search_contact_id == LinkedinSearchContact.id,
+            )
+            .filter(
+                LinkedinSearchContact.profile_id == p.id,
+                SalesPitch.pitch_channel == "linkedin",
+                SalesPitch.delivery_status == "sent",
+                func.coalesce(SalesPitch.delivered_at, SalesPitch.created_at) >= today_start,
+            )
+            .scalar()
+            or 0
+        )
+
+        connections_limit = p.max_connections_per_day or 20
+        messages_limit = p.max_messages_per_day or 15
+        weekly_limit = connections_limit * 7
+
+        resets_at = p.weekly_limit_resets_at
+        if not resets_at:
+            resets_at = _next_monday()
+
+        results.append(
+            {
+                "profileId": str(p.id),
+                "profileName": p.name,
+                "status": _infer_profile_status(p),
+                "connectionsUsed": connections_used,
+                "connectionsLimit": connections_limit,
+                "messagesUsed": messages_used,
+                "messagesLimit": messages_limit,
+                "weeklyUsed": weekly_used,
+                "weeklyLimit": weekly_limit,
+                "weeklyResetAt": resets_at.isoformat(),
+            }
+        )
+
+    return results
+
+
+@router.get("/quota-health")
+def get_quota_health(
+    profile_status: str = Query("all", alias="profileStatus"),
+    db: Session = Depends(get_db),
+):
+    try:
+        data = _build_quota_health(db, profile_status)
+        return success(data, "Quota health fetched successfully")
+    except Exception as exc:
+        return error(f"Failed to fetch quota health: {exc}")
+
+

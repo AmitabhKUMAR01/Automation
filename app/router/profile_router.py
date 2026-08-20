@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func
+from sqlalchemy import cast, func, Date as SADate
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
@@ -492,3 +492,264 @@ def get_funnel(
         return error(str(exc), status_code=400)
     except Exception as exc:
         return error(f"Failed to fetch outreach funnel stages: {exc}")
+
+
+def _build_comparison(
+    db: Session,
+    timeframe: str = "30d",
+    position: str = "all",
+    location: str = "all",
+    profile_status: str = "all",
+):
+    """Return one row per profile with all 5 comparison metrics."""
+    start_at = _timeframe_start(timeframe)
+    window_days = max(1, (datetime.now() - start_at).days) if start_at else None
+
+    # Fetch all profiles, optionally filtered by status
+    all_profiles = db.query(ProfileSetting).all()
+    if profile_status != "all":
+        all_profiles = [p for p in all_profiles if _infer_profile_status(p) == profile_status]
+
+    rows = []
+    for profile in all_profiles:
+        # ── per-profile contact filter base ──────────────────────────────────
+        base = [LinkedinSearchContact.profile_id == profile.id]
+        if position != "all":
+            base.append(_text_equals(LinkedinSearchContact.position, position))
+        if location != "all":
+            base.append(_text_equals(LinkedinSearchContact.location, location))
+
+        # ── connections sent ──────────────────────────────────────────────────
+        sent_q = db.query(func.count(LinkedinSearchContact.id)).filter(
+            LinkedinSearchContact.connection_sent.is_(True), *base
+        )
+        if start_at:
+            sent_q = sent_q.filter(LinkedinSearchContact.connection_sent_at >= start_at)
+        connections_sent = int(sent_q.scalar() or 0)
+
+        # ── connections accepted ──────────────────────────────────────────────
+        accepted_q = db.query(func.count(LinkedinSearchContact.id)).filter(
+            LinkedinSearchContact.is_connected.is_(True), *base
+        )
+        if start_at:
+            accepted_q = accepted_q.filter(LinkedinSearchContact.connected_at >= start_at)
+        connections_accepted = int(accepted_q.scalar() or 0)
+
+        # ── messages (DMs) sent ───────────────────────────────────────────────
+        msg_q = (
+            db.query(func.count(SalesPitch.id))
+            .join(LinkedinSearchContact, SalesPitch.linkedin_search_contact_id == LinkedinSearchContact.id)
+            .filter(
+                SalesPitch.pitch_channel == "linkedin",
+                SalesPitch.delivery_status == "sent",
+                *base,
+            )
+        )
+        if start_at:
+            msg_q = msg_q.filter(
+                func.coalesce(SalesPitch.delivered_at, SalesPitch.created_at) >= start_at
+            )
+        messages_sent = int(msg_q.scalar() or 0)
+
+        # ── replies received ──────────────────────────────────────────────────
+        reply_q = (
+            db.query(func.count(SalesPitch.id))
+            .join(LinkedinSearchContact, SalesPitch.linkedin_search_contact_id == LinkedinSearchContact.id)
+            .filter(SalesPitch.reply_received.is_(True), *base)
+        )
+        if start_at:
+            reply_q = reply_q.filter(
+                func.coalesce(SalesPitch.replied_at, SalesPitch.delivered_at, SalesPitch.created_at) >= start_at
+            )
+        replies_received = int(reply_q.scalar() or 0)
+
+        # ── derived rates ─────────────────────────────────────────────────────
+        acceptance_rate = round((connections_accepted / connections_sent) * 100, 1) if connections_sent else 0.0
+        reply_rate = round((replies_received / messages_sent) * 100, 1) if messages_sent else 0.0
+
+        # ── quota utilisation ─────────────────────────────────────────────────
+        daily_limit = profile.max_connections_per_day or 0
+        if daily_limit > 0:
+            if window_days:
+                eff_days = window_days
+            else:
+                # "all time" – derive window from earliest sent record for this profile
+                earliest = (
+                    db.query(func.min(LinkedinSearchContact.connection_sent_at))
+                    .filter(LinkedinSearchContact.profile_id == profile.id, LinkedinSearchContact.connection_sent.is_(True))
+                    .scalar()
+                )
+                earliest = _as_naive(earliest)
+                eff_days = max(1, (datetime.now() - earliest).days + 1) if earliest else 1
+
+            quota_utilization = round((connections_sent / (daily_limit * eff_days)) * 100, 1)
+        else:
+            quota_utilization = 0.0
+
+        rows.append({
+            "id": str(profile.id),
+            "name": profile.name,
+            "status": _infer_profile_status(profile),
+            "connections": connections_sent,
+            "acceptanceRate": acceptance_rate,
+            "messages": messages_sent,
+            "replyRate": reply_rate,
+            "quotaUtilization": quota_utilization,
+        })
+
+    # Sort by connections descending so the best-performing profile leads
+    rows.sort(key=lambda r: r["connections"], reverse=True)
+    return rows
+
+
+@router.get("/comparison")
+def get_comparison(
+    timeframe: str = Query("30d"),
+    position: str = Query("all"),
+    location: str = Query("all"),
+    job_type: str = Query("all", alias="jobType"),
+    job_status: str = Query("all", alias="jobStatus"),
+    profile_status: str = Query("all", alias="profileStatus"),
+    db: Session = Depends(get_db),
+):
+    try:
+        rows = _build_comparison(
+            db=db,
+            timeframe=timeframe,
+            position=position,
+            location=location,
+            profile_status=profile_status,
+        )
+        return success(rows, "Profile comparison fetched successfully")
+    except ValueError as exc:
+        return error(str(exc), status_code=400)
+    except Exception as exc:
+        return error(f"Failed to fetch profile comparison: {exc}")
+
+
+def _build_daily(
+    db: Session,
+    profile_id: str = "all",
+    timeframe: str = "30d",
+    position: str = "all",
+    location: str = "all",
+    profile_status: str = "all",
+):
+    """Return one data-point per calendar day for the 4 chart series."""
+    start_at = _timeframe_start(timeframe)
+    _, contact_filters = _profile_scope_for_filters(
+        db=db,
+        profile_id=profile_id,
+        profile_status=profile_status,
+        position=position,
+        location=location,
+    )
+
+    # ── connections sent per day ──────────────────────────────────────────────
+    sent_q = (
+        db.query(
+            cast(LinkedinSearchContact.connection_sent_at, SADate).label("day"),
+            func.count(LinkedinSearchContact.id).label("cnt"),
+        )
+        .filter(LinkedinSearchContact.connection_sent.is_(True), *contact_filters)
+    )
+    if start_at:
+        sent_q = sent_q.filter(LinkedinSearchContact.connection_sent_at >= start_at)
+    sent_by_day = {str(row.day): int(row.cnt) for row in sent_q.group_by("day").all() if row.day}
+
+    # ── connections accepted per day ──────────────────────────────────────────
+    accepted_q = (
+        db.query(
+            cast(LinkedinSearchContact.connected_at, SADate).label("day"),
+            func.count(LinkedinSearchContact.id).label("cnt"),
+        )
+        .filter(LinkedinSearchContact.is_connected.is_(True), *contact_filters)
+    )
+    if start_at:
+        accepted_q = accepted_q.filter(LinkedinSearchContact.connected_at >= start_at)
+    accepted_by_day = {str(row.day): int(row.cnt) for row in accepted_q.group_by("day").all() if row.day}
+
+    # ── DMs sent per day ──────────────────────────────────────────────────────
+    dms_q = (
+        db.query(
+            cast(
+                func.coalesce(SalesPitch.delivered_at, SalesPitch.created_at),
+                SADate,
+            ).label("day"),
+            func.count(SalesPitch.id).label("cnt"),
+        )
+        .join(LinkedinSearchContact, SalesPitch.linkedin_search_contact_id == LinkedinSearchContact.id)
+        .filter(
+            SalesPitch.pitch_channel == "linkedin",
+            SalesPitch.delivery_status == "sent",
+            *contact_filters,
+        )
+    )
+    if start_at:
+        dms_q = dms_q.filter(
+            func.coalesce(SalesPitch.delivered_at, SalesPitch.created_at) >= start_at
+        )
+    dms_by_day = {str(row.day): int(row.cnt) for row in dms_q.group_by("day").all() if row.day}
+
+    # ── replies received per day ──────────────────────────────────────────────
+    replies_q = (
+        db.query(
+            cast(
+                func.coalesce(SalesPitch.replied_at, SalesPitch.delivered_at, SalesPitch.created_at),
+                SADate,
+            ).label("day"),
+            func.count(SalesPitch.id).label("cnt"),
+        )
+        .join(LinkedinSearchContact, SalesPitch.linkedin_search_contact_id == LinkedinSearchContact.id)
+        .filter(SalesPitch.reply_received.is_(True), *contact_filters)
+    )
+    if start_at:
+        replies_q = replies_q.filter(
+            func.coalesce(
+                SalesPitch.replied_at, SalesPitch.delivered_at, SalesPitch.created_at
+            ) >= start_at
+        )
+    replies_by_day = {str(row.day): int(row.cnt) for row in replies_q.group_by("day").all() if row.day}
+
+    # ── merge all days and fill missing series with 0 ─────────────────────────
+    all_days = sorted(
+        set(sent_by_day) | set(accepted_by_day) | set(dms_by_day) | set(replies_by_day)
+    )
+
+    return [
+        {
+            "date": day,
+            "connectionsSent": sent_by_day.get(day, 0),
+            "connectionsAccepted": accepted_by_day.get(day, 0),
+            "dmsSent": dms_by_day.get(day, 0),
+            "repliesReceived": replies_by_day.get(day, 0),
+        }
+        for day in all_days
+    ]
+
+
+@router.get("/daily")
+def get_daily(
+    profile_id: str = Query("all", alias="profileId"),
+    timeframe: str = Query("30d"),
+    position: str = Query("all"),
+    location: str = Query("all"),
+    job_type: str = Query("all", alias="jobType"),
+    job_status: str = Query("all", alias="jobStatus"),
+    profile_status: str = Query("all", alias="profileStatus"),
+    db: Session = Depends(get_db),
+):
+    try:
+        points = _build_daily(
+            db=db,
+            profile_id=profile_id,
+            timeframe=timeframe,
+            position=position,
+            location=location,
+            profile_status=profile_status,
+        )
+        return success(points, "Daily activity fetched successfully")
+    except ValueError as exc:
+        return error(str(exc), status_code=400)
+    except Exception as exc:
+        return error(f"Failed to fetch daily activity: {exc}")

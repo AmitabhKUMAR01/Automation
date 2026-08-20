@@ -5,11 +5,13 @@ from app.router import lead_score
 from app.router import linkedin_router
 from app.router import profile_setting
 from app.router import profile_router
+from app.router import scheduler_router
 from app.core.scheduler import schedule_jobs, get_scheduler
 import app.models.website_audit
 import app.models.lead_score
 import app.models.sales_pitch
 import app.models.linkedin_contact # registers telegram_pending_actions table
+import app.models.scheduler_job_run
 
 app = FastAPI(title="API")
 
@@ -19,6 +21,7 @@ app.include_router(lead_score.router)
 app.include_router(linkedin_router.router)
 app.include_router(profile_setting.router)
 app.include_router(profile_router.router)
+app.include_router(scheduler_router.router)
 
 
 @app.on_event("startup")

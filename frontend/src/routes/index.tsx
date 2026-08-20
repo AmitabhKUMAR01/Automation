@@ -16,7 +16,7 @@ import { SegmentPerformanceTable } from "@/components/dashboard/SegmentPerforman
 import { OverallConversion } from "@/components/dashboard/OverallConversion";
 import { ErrorState } from "@/components/dashboard/primitives";
 import { dashboardQueryOptions } from "@/lib/analytics/api";
-import { defaultFilters, type AnalyticsFilters, type KpiSet, type FunnelStage } from "@/lib/analytics/types";
+import { defaultFilters, type AnalyticsFilters, type KpiSet, type FunnelStage, type ProfileComparisonRow, type DailyActivityPoint, type SchedulerHealth } from "@/lib/analytics/types";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -81,15 +81,73 @@ function DashboardPage() {
     },
   });
 
+  const comparisonQuery = useQuery({
+    queryKey: ["profile-comparison", filters] as const,
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (filters.timeframe) params.set("timeframe", filters.timeframe);
+      if (filters.position) params.set("position", filters.position);
+      if (filters.location) params.set("location", filters.location);
+      if (filters.jobType) params.set("jobType", filters.jobType);
+      if (filters.jobStatus) params.set("jobStatus", filters.jobStatus);
+      if (filters.profileStatus) params.set("profileStatus", filters.profileStatus);
+
+      const res = await fetch(`/api/profile/comparison?${params.toString()}`);
+      if (!res.ok) throw new Error("Failed to load profile comparison");
+      const result = await res.json();
+      return result.data as ProfileComparisonRow[];
+    },
+  });
+
+  const dailyQuery = useQuery({
+    queryKey: ["profile-daily", filters] as const,
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (filters.profileId) params.set("profileId", filters.profileId);
+      if (filters.timeframe) params.set("timeframe", filters.timeframe);
+      if (filters.position) params.set("position", filters.position);
+      if (filters.location) params.set("location", filters.location);
+      if (filters.jobType) params.set("jobType", filters.jobType);
+      if (filters.jobStatus) params.set("jobStatus", filters.jobStatus);
+      if (filters.profileStatus) params.set("profileStatus", filters.profileStatus);
+
+      const res = await fetch(`/api/profile/daily?${params.toString()}`);
+      if (!res.ok) throw new Error("Failed to load daily activity");
+      const result = await res.json();
+      return result.data as DailyActivityPoint[];
+    },
+  });
+
+  const schedulerHealthQuery = useQuery({
+    queryKey: ["scheduler-health", filters] as const,
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (filters.timeframe) params.set("timeframe", filters.timeframe);
+      if (filters.jobStatus) params.set("jobStatus", filters.jobStatus);
+      if (filters.jobType) params.set("jobType", filters.jobType);
+
+      const res = await fetch(`/api/scheduler/health?${params.toString()}`);
+      if (!res.ok) throw new Error("Failed to load scheduler health");
+      const result = await res.json();
+      return result.data as SchedulerHealth;
+    },
+  });
+
   const handleRefresh = () => {
     refetch();
     kpisQuery.refetch();
     funnelQuery.refetch();
+    comparisonQuery.refetch();
+    dailyQuery.refetch();
+    schedulerHealthQuery.refetch();
   };
 
   const isKpisLoading = kpisQuery.isPending;
   const isKpisFetching = kpisQuery.isFetching;
   const isFunnelFetching = funnelQuery.isFetching;
+  const isComparisonFetching = comparisonQuery.isFetching;
+  const isDailyFetching = dailyQuery.isFetching;
+  const isSchedulerFetching = schedulerHealthQuery.isFetching;
 
   return (
     <main className="mx-auto w-full max-w-[1400px] px-4 pb-16 pt-6 sm:px-6">
@@ -106,8 +164,8 @@ function DashboardPage() {
             Connections, conversations and automation health across every connected profile.
           </p>
         </div>
-        <Button variant="outline" onClick={handleRefresh} disabled={isFetching || isKpisFetching || isFunnelFetching} className="gap-2">
-          {isFetching || isKpisFetching || isFunnelFetching ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+        <Button variant="outline" onClick={handleRefresh} disabled={isFetching || isKpisFetching || isFunnelFetching || isComparisonFetching || isDailyFetching || isSchedulerFetching} className="gap-2">
+          {isFetching || isKpisFetching || isFunnelFetching || isComparisonFetching || isDailyFetching || isSchedulerFetching ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
           Refresh
         </Button>
       </header>
@@ -115,12 +173,15 @@ function DashboardPage() {
       <FiltersBar filters={filters} onChange={setFilters} />
 
       <div className="mt-5 space-y-5">
-        {isError || kpisQuery.isError || funnelQuery.isError ? (
+        {isError || kpisQuery.isError || funnelQuery.isError || comparisonQuery.isError || dailyQuery.isError || schedulerHealthQuery.isError ? (
           <ErrorState
             message={
               (error as Error)?.message ?? 
               (kpisQuery.error as Error)?.message ?? 
               (funnelQuery.error as Error)?.message ?? 
+              (comparisonQuery.error as Error)?.message ?? 
+              (dailyQuery.error as Error)?.message ?? 
+              (schedulerHealthQuery.error as Error)?.message ?? 
               "We couldn't load analytics data."
             }
             onRetry={handleRefresh}
@@ -129,7 +190,7 @@ function DashboardPage() {
           <>
             <KpiCards kpis={kpisQuery.data} loading={isKpisLoading} />
 
-            {isPending || kpisQuery.isPending || funnelQuery.isPending || !data || !funnelQuery.data ? (
+            {isPending || kpisQuery.isPending || funnelQuery.isPending || comparisonQuery.isPending || dailyQuery.isPending || schedulerHealthQuery.isPending || !data || !funnelQuery.data || !comparisonQuery.data || !dailyQuery.data || !schedulerHealthQuery.data ? (
               <>
                 <div className="grid gap-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)]">
                   <Skeleton className="h-[380px] rounded-2xl" />
@@ -142,12 +203,12 @@ function DashboardPage() {
               <>
                 <div className="grid gap-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)]">
                   <OutreachFunnel stages={funnelQuery.data} />
-                  <DailyActivity data={data.daily} />
+                  <DailyActivity data={dailyQuery.data} />
                 </div>
 
-                <ProfileComparison rows={data.comparison} />
+                <ProfileComparison rows={comparisonQuery.data} />
                 <QuotaHealthPanel quota={data.quota} />
-                <SchedulerHealthPanel scheduler={data.scheduler} />
+                <SchedulerHealthPanel scheduler={schedulerHealthQuery.data} filters={filters} />
 
                 <div className="grid gap-5 xl:grid-cols-2">
                   <SegmentPerformanceTable

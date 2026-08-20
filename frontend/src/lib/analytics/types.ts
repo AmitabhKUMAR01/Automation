@@ -114,6 +114,14 @@ export interface SchedulerHealth {
   recentRuns: JobRun[];
 }
 
+export interface PaginatedRuns {
+  items: JobRun[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
 export interface SegmentPerformance {
   key: string;
   label: string;

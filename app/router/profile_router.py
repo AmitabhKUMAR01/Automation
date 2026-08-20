@@ -343,3 +343,152 @@ def get_kpis(
         return error(str(exc), status_code=400)
     except Exception as exc:
         return error(f"Failed to fetch profile KPI metrics: {exc}")
+
+
+def _build_funnel(
+    db: Session,
+    profile_id: str = "all",
+    timeframe: str = "30d",
+    position: str = "all",
+    location: str = "all",
+    job_type: str = "all",
+    job_status: str = "all",
+    profile_status: str = "all",
+):
+    start_at = _timeframe_start(timeframe)
+    profile_ids, contact_filters = _profile_scope_for_filters(
+        db=db,
+        profile_id=profile_id,
+        profile_status=profile_status,
+        position=position,
+        location=location,
+    )
+
+    if profile_id != "all" and not profile_ids:
+        return [
+            {"key": "sent", "label": "Connections Sent", "value": 0, "conversionFromPrev": None},
+            {"key": "accepted", "label": "Connections Accepted", "value": 0, "conversionFromPrev": 0.0},
+            {"key": "dms", "label": "DMs Sent", "value": 0, "conversionFromPrev": 0.0},
+            {"key": "replies", "label": "Replies Received", "value": 0, "conversionFromPrev": 0.0},
+        ]
+
+    sent_query = db.query(func.count(LinkedinSearchContact.id)).filter(
+        LinkedinSearchContact.connection_sent.is_(True),
+        *contact_filters,
+    )
+    if start_at:
+        sent_query = sent_query.filter(LinkedinSearchContact.connection_sent_at >= start_at)
+
+    accepted_query = db.query(func.count(LinkedinSearchContact.id)).filter(
+        LinkedinSearchContact.is_connected.is_(True),
+        *contact_filters,
+    )
+    if start_at:
+        accepted_query = accepted_query.filter(LinkedinSearchContact.connected_at >= start_at)
+
+    pitch_query = (
+        db.query(func.count(SalesPitch.id))
+        .join(
+            LinkedinSearchContact,
+            SalesPitch.linkedin_search_contact_id == LinkedinSearchContact.id,
+        )
+        .filter(
+            SalesPitch.pitch_channel == "linkedin",
+            SalesPitch.delivery_status == "sent",
+            *contact_filters,
+        )
+    )
+    if start_at:
+        pitch_query = pitch_query.filter(
+            func.coalesce(SalesPitch.delivered_at, SalesPitch.created_at) >= start_at
+        )
+
+    reply_query = (
+        db.query(func.count(SalesPitch.id))
+        .join(
+            LinkedinSearchContact,
+            SalesPitch.linkedin_search_contact_id == LinkedinSearchContact.id,
+        )
+        .filter(
+            SalesPitch.reply_received.is_(True),
+            *contact_filters,
+        )
+    )
+    if start_at:
+        reply_query = reply_query.filter(
+            func.coalesce(
+                SalesPitch.replied_at,
+                SalesPitch.delivered_at,
+                SalesPitch.created_at,
+            )
+            >= start_at
+        )
+
+    connections_sent = int(sent_query.scalar() or 0)
+    connections_accepted = int(accepted_query.scalar() or 0)
+    messages_sent = int(pitch_query.scalar() or 0)
+    replies_received = int(reply_query.scalar() or 0)
+
+    # Conversion rate calculations
+    acceptance_rate = round((connections_accepted / connections_sent) * 100, 1) if connections_sent else 0.0
+    dm_rate = round((messages_sent / connections_accepted) * 100, 1) if connections_accepted else 0.0
+    reply_rate = round((replies_received / messages_sent) * 100, 1) if messages_sent else 0.0
+
+    return [
+        {
+            "key": "sent",
+            "label": "Connections Sent",
+            "value": connections_sent,
+            "conversionFromPrev": None,
+        },
+        {
+            "key": "accepted",
+            "label": "Connections Accepted",
+            "value": connections_accepted,
+            "conversionFromPrev": acceptance_rate,
+        },
+        {
+            "key": "dms",
+            "label": "DMs Sent",
+            "value": messages_sent,
+            "conversionFromPrev": dm_rate,
+        },
+        {
+            "key": "replies",
+            "label": "Replies Received",
+            "value": replies_received,
+            "conversionFromPrev": reply_rate,
+        },
+    ]
+
+
+@router.get("/funnel")
+def get_funnel(
+    profile_id: str = Query("all", alias="profileId"),
+    timeframe: str = Query("30d"),
+    position: str = Query("all"),
+    location: str = Query("all"),
+    job_type: str = Query("all", alias="jobType"),
+    job_status: str = Query("all", alias="jobStatus"),
+    profile_status: str = Query("all", alias="profileStatus"),
+    db: Session = Depends(get_db),
+):
+    try:
+        funnel = _build_funnel(
+            db=db,
+            profile_id=profile_id,
+            timeframe=timeframe,
+            position=position,
+            location=location,
+            job_type=job_type,
+            job_status=job_status,
+            profile_status=profile_status,
+        )
+        return success(
+            funnel,
+            "Outreach funnel stages fetched successfully",
+        )
+    except ValueError as exc:
+        return error(str(exc), status_code=400)
+    except Exception as exc:
+        return error(f"Failed to fetch outreach funnel stages: {exc}")

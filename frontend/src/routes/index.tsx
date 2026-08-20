@@ -16,7 +16,7 @@ import { SegmentPerformanceTable } from "@/components/dashboard/SegmentPerforman
 import { OverallConversion } from "@/components/dashboard/OverallConversion";
 import { ErrorState } from "@/components/dashboard/primitives";
 import { dashboardQueryOptions } from "@/lib/analytics/api";
-import { defaultFilters, type AnalyticsFilters, type KpiSet } from "@/lib/analytics/types";
+import { defaultFilters, type AnalyticsFilters, type KpiSet, type FunnelStage } from "@/lib/analytics/types";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -62,13 +62,34 @@ function DashboardPage() {
     },
   });
 
+  const funnelQuery = useQuery({
+    queryKey: ["profile-funnel", filters] as const,
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (filters.profileId) params.set("profileId", filters.profileId);
+      if (filters.timeframe) params.set("timeframe", filters.timeframe);
+      if (filters.position) params.set("position", filters.position);
+      if (filters.location) params.set("location", filters.location);
+      if (filters.jobType) params.set("jobType", filters.jobType);
+      if (filters.jobStatus) params.set("jobStatus", filters.jobStatus);
+      if (filters.profileStatus) params.set("profileStatus", filters.profileStatus);
+
+      const res = await fetch(`/api/profile/funnel?${params.toString()}`);
+      if (!res.ok) throw new Error("Failed to load funnel data");
+      const result = await res.json();
+      return result.data as FunnelStage[];
+    },
+  });
+
   const handleRefresh = () => {
     refetch();
     kpisQuery.refetch();
+    funnelQuery.refetch();
   };
 
   const isKpisLoading = kpisQuery.isPending;
   const isKpisFetching = kpisQuery.isFetching;
+  const isFunnelFetching = funnelQuery.isFetching;
 
   return (
     <main className="mx-auto w-full max-w-[1400px] px-4 pb-16 pt-6 sm:px-6">
@@ -85,8 +106,8 @@ function DashboardPage() {
             Connections, conversations and automation health across every connected profile.
           </p>
         </div>
-        <Button variant="outline" onClick={handleRefresh} disabled={isFetching || isKpisFetching} className="gap-2">
-          {isFetching || isKpisFetching ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+        <Button variant="outline" onClick={handleRefresh} disabled={isFetching || isKpisFetching || isFunnelFetching} className="gap-2">
+          {isFetching || isKpisFetching || isFunnelFetching ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
           Refresh
         </Button>
       </header>
@@ -94,11 +115,12 @@ function DashboardPage() {
       <FiltersBar filters={filters} onChange={setFilters} />
 
       <div className="mt-5 space-y-5">
-        {isError || kpisQuery.isError ? (
+        {isError || kpisQuery.isError || funnelQuery.isError ? (
           <ErrorState
             message={
               (error as Error)?.message ?? 
               (kpisQuery.error as Error)?.message ?? 
+              (funnelQuery.error as Error)?.message ?? 
               "We couldn't load analytics data."
             }
             onRetry={handleRefresh}
@@ -107,7 +129,7 @@ function DashboardPage() {
           <>
             <KpiCards kpis={kpisQuery.data} loading={isKpisLoading} />
 
-            {isPending || !data ? (
+            {isPending || kpisQuery.isPending || funnelQuery.isPending || !data || !funnelQuery.data ? (
               <>
                 <div className="grid gap-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)]">
                   <Skeleton className="h-[380px] rounded-2xl" />
@@ -119,7 +141,7 @@ function DashboardPage() {
             ) : (
               <>
                 <div className="grid gap-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)]">
-                  <OutreachFunnel stages={data.funnel} />
+                  <OutreachFunnel stages={funnelQuery.data} />
                   <DailyActivity data={data.daily} />
                 </div>
 

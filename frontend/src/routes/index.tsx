@@ -16,7 +16,7 @@ import { SegmentPerformanceTable } from "@/components/dashboard/SegmentPerforman
 import { OverallConversion } from "@/components/dashboard/OverallConversion";
 import { ErrorState } from "@/components/dashboard/primitives";
 import { dashboardQueryOptions } from "@/lib/analytics/api";
-import { defaultFilters, type AnalyticsFilters, type KpiSet, type FunnelStage, type ProfileComparisonRow, type DailyActivityPoint, type SchedulerHealth, type QuotaHealth } from "@/lib/analytics/types";
+import { defaultFilters, type AnalyticsFilters, type KpiSet, type FunnelStage, type ProfileComparisonRow, type DailyActivityPoint, type SchedulerHealth, type QuotaHealth, type SegmentPerformance, type ConversionSet } from "@/lib/analytics/types";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -144,6 +144,49 @@ function DashboardPage() {
       return result.data as QuotaHealth[];
     },
   });
+
+  function buildSegmentParams(by: string) {
+    const p = new URLSearchParams({ by });
+    if (filters.profileId && filters.profileId !== "all") p.set("profileId", filters.profileId);
+    if (filters.profileStatus && filters.profileStatus !== "all") p.set("profileStatus", filters.profileStatus);
+    if (filters.timeframe) p.set("timeframe", filters.timeframe);
+    return p;
+  }
+
+  const keywordQuery = useQuery({
+    queryKey: ["segment-keyword", filters] as const,
+    queryFn: async () => {
+      const res = await fetch(`/api/profile/segment?${buildSegmentParams("position").toString()}`);
+      if (!res.ok) throw new Error("Failed to load keyword performance");
+      const result = await res.json();
+      return result.data as SegmentPerformance[];
+    },
+  });
+
+  const locationQuery = useQuery({
+    queryKey: ["segment-location", filters] as const,
+    queryFn: async () => {
+      const res = await fetch(`/api/profile/segment?${buildSegmentParams("location").toString()}`);
+      if (!res.ok) throw new Error("Failed to load location performance");
+      const result = await res.json();
+      return result.data as SegmentPerformance[];
+    },
+  });
+
+  const conversionQuery = useQuery({
+    queryKey: ["conversions", filters] as const,
+    queryFn: async () => {
+      const p = new URLSearchParams();
+      if (filters.profileId && filters.profileId !== "all") p.set("profileId", filters.profileId);
+      if (filters.profileStatus && filters.profileStatus !== "all") p.set("profileStatus", filters.profileStatus);
+      if (filters.timeframe) p.set("timeframe", filters.timeframe);
+      const res = await fetch(`/api/profile/conversions?${p.toString()}`);
+      if (!res.ok) throw new Error("Failed to load conversions");
+      const result = await res.json();
+      return result.data as ConversionSet;
+    },
+  });
+
   const handleRefresh = () => {
     refetch();
     kpisQuery.refetch();
@@ -152,6 +195,9 @@ function DashboardPage() {
     dailyQuery.refetch();
     schedulerHealthQuery.refetch();
     quotaHealthQuery.refetch();
+    keywordQuery.refetch();
+    locationQuery.refetch();
+    conversionQuery.refetch();
   };
 
   const isKpisLoading = kpisQuery.isPending;
@@ -161,6 +207,8 @@ function DashboardPage() {
   const isDailyFetching = dailyQuery.isFetching;
   const isSchedulerFetching = schedulerHealthQuery.isFetching;
   const isQuotaFetching = quotaHealthQuery.isFetching;
+  const isSegmentFetching = keywordQuery.isFetching || locationQuery.isFetching;
+  const isConversionFetching = conversionQuery.isFetching;
 
   return (
     <main className="mx-auto w-full max-w-[1400px] px-4 pb-16 pt-6 sm:px-6">
@@ -177,8 +225,8 @@ function DashboardPage() {
             Connections, conversations and automation health across every connected profile.
           </p>
         </div>
-        <Button variant="outline" onClick={handleRefresh} disabled={isFetching || isKpisFetching || isFunnelFetching || isComparisonFetching || isDailyFetching || isSchedulerFetching || isQuotaFetching} className="gap-2">
-          {isFetching || isKpisFetching || isFunnelFetching || isComparisonFetching || isDailyFetching || isSchedulerFetching || isQuotaFetching ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+        <Button variant="outline" onClick={handleRefresh} disabled={isFetching || isKpisFetching || isFunnelFetching || isComparisonFetching || isDailyFetching || isSchedulerFetching || isQuotaFetching || isSegmentFetching || isConversionFetching} className="gap-2">
+          {isFetching || isKpisFetching || isFunnelFetching || isComparisonFetching || isDailyFetching || isSchedulerFetching || isQuotaFetching || isSegmentFetching || isConversionFetching ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
           Refresh
         </Button>
       </header>
@@ -186,7 +234,7 @@ function DashboardPage() {
       <FiltersBar filters={filters} onChange={setFilters} />
 
       <div className="mt-5 space-y-5">
-        {isError || kpisQuery.isError || funnelQuery.isError || comparisonQuery.isError || dailyQuery.isError || schedulerHealthQuery.isError || quotaHealthQuery.isError ? (
+        {isError || kpisQuery.isError || funnelQuery.isError || comparisonQuery.isError || dailyQuery.isError || schedulerHealthQuery.isError || quotaHealthQuery.isError || keywordQuery.isError || locationQuery.isError || conversionQuery.isError ? (
           <ErrorState
             message={
               (error as Error)?.message ?? 
@@ -196,6 +244,9 @@ function DashboardPage() {
               (dailyQuery.error as Error)?.message ?? 
               (schedulerHealthQuery.error as Error)?.message ?? 
               (quotaHealthQuery.error as Error)?.message ?? 
+              (keywordQuery.error as Error)?.message ?? 
+              (locationQuery.error as Error)?.message ?? 
+              (conversionQuery.error as Error)?.message ?? 
               "We couldn't load analytics data."
             }
             onRetry={handleRefresh}
@@ -204,7 +255,7 @@ function DashboardPage() {
           <>
             <KpiCards kpis={kpisQuery.data} loading={isKpisLoading} />
 
-            {isPending || kpisQuery.isPending || funnelQuery.isPending || comparisonQuery.isPending || dailyQuery.isPending || schedulerHealthQuery.isPending || quotaHealthQuery.isPending || !data || !funnelQuery.data || !comparisonQuery.data || !dailyQuery.data || !schedulerHealthQuery.data || !quotaHealthQuery.data ? (
+            {isPending || kpisQuery.isPending || funnelQuery.isPending || comparisonQuery.isPending || dailyQuery.isPending || schedulerHealthQuery.isPending || quotaHealthQuery.isPending || keywordQuery.isPending || locationQuery.isPending || conversionQuery.isPending || !data || !funnelQuery.data || !comparisonQuery.data || !dailyQuery.data || !schedulerHealthQuery.data || !quotaHealthQuery.data || !keywordQuery.data || !locationQuery.data || !conversionQuery.data ? (
               <>
                 <div className="grid gap-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)]">
                   <Skeleton className="h-[380px] rounded-2xl" />
@@ -229,17 +280,17 @@ function DashboardPage() {
                     title="Keyword Performance"
                     description="Results broken down by target position."
                     columnLabel="Target position"
-                    rows={data.byPosition}
+                    rows={keywordQuery.data}
                   />
                   <SegmentPerformanceTable
                     title="Location Performance"
                     description="Results broken down by target location."
                     columnLabel="Location"
-                    rows={data.byLocation}
+                    rows={locationQuery.data}
                   />
                 </div>
 
-                <OverallConversion conversions={data.conversions} />
+                <OverallConversion conversions={conversionQuery.data} />
               </>
             )}
           </>

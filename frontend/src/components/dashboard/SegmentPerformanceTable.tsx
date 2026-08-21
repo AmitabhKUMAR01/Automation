@@ -23,7 +23,7 @@ export function SegmentPerformanceTable({
             <thead>
               <tr className="text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <th className="pb-2 font-medium">{columnLabel}</th>
-                <th className="pb-2 text-right font-medium">Leads</th>
+                {/* <th className="pb-2 text-right font-medium">Leads</th> */}
                 <th className="pb-2 text-right font-medium">Connections</th>
                 <th className="pb-2 text-right font-medium">Acceptance %</th>
                 <th className="pb-2 text-right font-medium">Messages</th>
@@ -35,7 +35,7 @@ export function SegmentPerformanceTable({
               {rows.map((r) => (
                 <tr key={r.key} className="border-t border-border/60">
                   <td className="py-2.5 font-medium text-foreground">{r.label}</td>
-                  <td className="py-2.5 text-right tabular-nums">{r.leads.toLocaleString()}</td>
+                  {/* <td className="py-2.5 text-right tabular-nums">{r.leads.toLocaleString()}</td> */}
                   <td className="py-2.5 text-right tabular-nums">{r.connections.toLocaleString()}</td>
                   <td className="py-2.5 text-right tabular-nums">{r.acceptanceRate}%</td>
                   <td className="py-2.5 text-right tabular-nums">{r.messages.toLocaleString()}</td>

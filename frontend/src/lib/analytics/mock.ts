@@ -324,11 +324,10 @@ export function buildMockDashboard(filters: AnalyticsFilters): DashboardData {
     byPosition: buildSegments(positionKeys, segTotals, 41),
     byLocation: buildSegments(locationKeys, segTotals, 77),
     conversions: {
-      leadToConnection: pct(totals.connectionsSent, leads),
-      connectionToAcceptance: pct(totals.connectionsAccepted, totals.connectionsSent),
-      acceptanceToDm: pct(totals.dmsSent, totals.connectionsAccepted),
+      sentToAccepted: pct(totals.connectionsAccepted, totals.connectionsSent),
+      acceptedToDm: pct(totals.dmsSent, totals.connectionsAccepted),
       dmToReply: pct(totals.repliesReceived, totals.dmsSent),
-      leadToReply: pct(totals.repliesReceived, leads),
+      overallSentToReply: pct(totals.repliesReceived, totals.connectionsSent),
     },
   };
 }

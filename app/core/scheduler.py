@@ -417,88 +417,88 @@ def schedule_jobs():
     logger.info(f"[SCHEDULER] Lead scoring job scheduled at {score_hour:02d}:{score_minute:02d} daily.")
 
     # ---- LinkedIn Connections Batch Job (DISABLED — connections now sent inline during search) ----
-    # connections_hour   = int(os.getenv("LINKEDIN_CONNECTIONS_SCHEDULE_HOUR",   "4"))
-    # connections_minute = int(os.getenv("LINKEDIN_CONNECTIONS_SCHEDULE_MINUTE", "0"))
-    # _scheduler.add_job(
-    #     make_tracked_job(scheduled_linkedin_connections, job_id="daily_linkedin_connections", job_name="LinkedIn Connections", max_retries=1, retry_delay_sec=linkedin_retry_delay),
-    #     "cron",
-    #     hour=connections_hour,
-    #     minute=connections_minute,
-    #     id="daily_linkedin_connections",
-    #     replace_existing=True,
-    # )
-    # logger.info(f"[SCHEDULER] LinkedIn connections job scheduled at {connections_hour:02d}:{connections_minute:02d} daily.")
+    connections_hour   = int(os.getenv("LINKEDIN_CONNECTIONS_SCHEDULE_HOUR",   "4"))
+    connections_minute = int(os.getenv("LINKEDIN_CONNECTIONS_SCHEDULE_MINUTE", "0"))
+    _scheduler.add_job(
+        make_tracked_job(scheduled_linkedin_connections, job_id="daily_linkedin_connections", job_name="LinkedIn Connections", max_retries=1, retry_delay_sec=linkedin_retry_delay),
+        "cron",
+        hour=connections_hour,
+        minute=connections_minute,
+        id="daily_linkedin_connections",
+        replace_existing=True,
+    )
+    logger.info(f"[SCHEDULER] LinkedIn connections job scheduled at {connections_hour:02d}:{connections_minute:02d} daily.")
 
     # ---- LinkedIn Acceptance Check Job (runs every 2 hours) ----
-    # acceptance_interval_hours = int(os.getenv("LINKEDIN_ACCEPTANCE_INTERVAL_HOURS", "2"))
-    # _scheduler.add_job(
-    #     make_tracked_job(scheduled_linkedin_acceptance_check, job_id="linkedin_acceptance_check", job_name="LinkedIn Acceptance Check", max_retries=1, retry_delay_sec=linkedin_retry_delay),
-    #     "interval",
-    #     minutes=acceptance_interval_hours,
-    #     id="linkedin_acceptance_check",
-    #     replace_existing=True,
-    #     jitter=300,
-    # )
-    # logger.info(f"[SCHEDULER] LinkedIn acceptance check job scheduled every {acceptance_interval_hours} hour(s).")
+    acceptance_interval_hours = int(os.getenv("LINKEDIN_ACCEPTANCE_INTERVAL_HOURS", "2"))
+    _scheduler.add_job(
+        make_tracked_job(scheduled_linkedin_acceptance_check, job_id="linkedin_acceptance_check", job_name="LinkedIn Acceptance Check", max_retries=1, retry_delay_sec=linkedin_retry_delay),
+        "interval",
+        minutes=acceptance_interval_hours,
+        id="linkedin_acceptance_check",
+        replace_existing=True,
+        jitter=300,
+    )
+    logger.info(f"[SCHEDULER] LinkedIn acceptance check job scheduled every {acceptance_interval_hours} hour(s).")
 
     # ---- Pitch Delivery Job (email + LinkedIn DMs, runs after lead scoring) ----
-    # delivery_hour   = int(os.getenv("PITCH_DELIVERY_SCHEDULE_HOUR",   "14"))
-    # delivery_minute = int(os.getenv("PITCH_DELIVERY_SCHEDULE_MINUTE", "0"))
-    # _scheduler.add_job(
-    #     make_tracked_job(scheduled_pitch_delivery, job_id="daily_pitch_delivery", job_name="Pitch Delivery", max_retries=2, retry_delay_sec=default_retry_delay),
-    #     "cron",
-    #     hour=delivery_hour,
-    #     minute=delivery_minute,
-    #     id="daily_pitch_delivery",
-    #     replace_existing=True,
-    #     jitter=120,
-    # )
-    # logger.info(f"[SCHEDULER] Pitch delivery job scheduled at {delivery_hour:02d}:{delivery_minute:02d} daily.")
+    delivery_hour   = int(os.getenv("PITCH_DELIVERY_SCHEDULE_HOUR",   "14"))
+    delivery_minute = int(os.getenv("PITCH_DELIVERY_SCHEDULE_MINUTE", "0"))
+    _scheduler.add_job(
+        make_tracked_job(scheduled_pitch_delivery, job_id="daily_pitch_delivery", job_name="Pitch Delivery", max_retries=2, retry_delay_sec=default_retry_delay),
+        "cron",
+        hour=delivery_hour,
+        minute=delivery_minute,
+        id="daily_pitch_delivery",
+        replace_existing=True,
+        jitter=120,
+    )
+    logger.info(f"[SCHEDULER] Pitch delivery job scheduled at {delivery_hour:02d}:{delivery_minute:02d} daily.")
 
     # ---- LinkedIn Reply Check Job (Hybrid: inbox scan + targeted thread check) ----
-    # reply_interval_hours = int(os.getenv("REPLY_CHECK_INTERVAL_HOURS", "4"))
-    # _scheduler.add_job(
-    #     make_tracked_job(scheduled_pitch_reply_check, job_id="periodic_pitch_reply_check", job_name="Pitch Reply Check", max_retries=1, retry_delay_sec=linkedin_retry_delay),
-    #     "interval",
-    #     minutes=reply_interval_hours,
-    #     id="periodic_pitch_reply_check",
-    #     replace_existing=True,
-    #     jitter=45,
-    # )
-    # logger.info(f"[SCHEDULER] Pitch reply check job scheduled every {reply_interval_hours} minute(s).")
+    reply_interval_hours = int(os.getenv("REPLY_CHECK_INTERVAL_HOURS", "4"))
+    _scheduler.add_job(
+        make_tracked_job(scheduled_pitch_reply_check, job_id="periodic_pitch_reply_check", job_name="Pitch Reply Check", max_retries=1, retry_delay_sec=linkedin_retry_delay),
+        "interval",
+        minutes=reply_interval_hours,
+        id="periodic_pitch_reply_check",
+        replace_existing=True,
+        jitter=45,
+    )
+    logger.info(f"[SCHEDULER] Pitch reply check job scheduled every {reply_interval_hours} minute(s).")
 
-    # followup_interval_hours = int(os.getenv("FOLLOWUP_REPLY_CHECK_INTERVAL_HOURS", str(reply_interval_hours)))
-    # _scheduler.add_job(
-    #     make_tracked_job(
-    #         scheduled_followup_reply_check,
-    #         job_id="periodic_followup_reply_check",
-    #         job_name="Follow-up Reply Check",
-    #         max_retries=1,
-    #         retry_delay_sec=linkedin_retry_delay,
-    #     ),
-    #     "interval",
-    #     minutes=followup_interval_hours,
-    #     id="periodic_followup_reply_check",
-    #     replace_existing=True,
-    #     jitter=60,
-    # )
-    # logger.info(f"[SCHEDULER] Follow-up reply check job scheduled every {followup_interval_hours} minute(s).")
+    followup_interval_hours = int(os.getenv("FOLLOWUP_REPLY_CHECK_INTERVAL_HOURS", str(reply_interval_hours)))
+    _scheduler.add_job(
+        make_tracked_job(
+            scheduled_followup_reply_check,
+            job_id="periodic_followup_reply_check",
+            job_name="Follow-up Reply Check",
+            max_retries=1,
+            retry_delay_sec=linkedin_retry_delay,
+        ),
+        "interval",
+        minutes=followup_interval_hours,
+        id="periodic_followup_reply_check",
+        replace_existing=True,
+        jitter=60,
+    )
+    logger.info(f"[SCHEDULER] Follow-up reply check job scheduled every {followup_interval_hours} minute(s).")
 
     # ---- Telegram Action Poller (polls bridge API for pending actions) ----
-    # telegram_poll_interval_sec = int(os.getenv("TELEGRAM_POLLER_INTERVAL_SEC", "60"))
-    # _scheduler.add_job(
-    #     make_tracked_job(
-    #         scheduled_telegram_action_poll,
-    #         job_id="telegram_action_poll",
-    #         job_name="Telegram Action Poller",
-    #         max_retries=0,
-    #     ),
-    #     "interval",
-    #     seconds=telegram_poll_interval_sec,
-    #     id="telegram_action_poll",
-    #     replace_existing=True,
-    # )
-    # logger.info(f"[SCHEDULER] Telegram action poller scheduled every {telegram_poll_interval_sec}s.")
+    telegram_poll_interval_sec = int(os.getenv("TELEGRAM_POLLER_INTERVAL_SEC", "60"))
+    _scheduler.add_job(
+        make_tracked_job(
+            scheduled_telegram_action_poll,
+            job_id="telegram_action_poll",
+            job_name="Telegram Action Poller",
+            max_retries=0,
+        ),
+        "interval",
+        seconds=telegram_poll_interval_sec,
+        id="telegram_action_poll",
+        replace_existing=True,
+    )
+    logger.info(f"[SCHEDULER] Telegram action poller scheduled every {telegram_poll_interval_sec}s.")
 
     _scheduler.start()
     return _scheduler

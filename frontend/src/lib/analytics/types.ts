@@ -125,7 +125,7 @@ export interface PaginatedRuns {
 export interface SegmentPerformance {
   key: string;
   label: string;
-  leads: number;
+  leads?: number;
   connections: number;
   acceptanceRate: number;
   messages: number;
@@ -134,11 +134,16 @@ export interface SegmentPerformance {
 }
 
 export interface ConversionSet {
-  leadToConnection: number;
-  connectionToAcceptance: number;
-  acceptanceToDm: number;
+  sentToAccepted: number;
+  acceptedToDm: number;
   dmToReply: number;
-  leadToReply: number;
+  overallSentToReply: number;
+  rawCounts?: {
+    connectionsSent: number;
+    accepted: number;
+    dmsSent: number;
+    replies: number;
+  };
 }
 
 export interface DashboardData {

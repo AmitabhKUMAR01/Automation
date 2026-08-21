@@ -856,3 +856,262 @@ def get_quota_health(
         return error(f"Failed to fetch quota health: {exc}")
 
 
+def _build_segment(
+    db: Session,
+    by: str,
+    timeframe: str,
+    profile_id: str,
+    profile_status: str,
+) -> list[dict]:
+    """
+    Aggregate outreach metrics broken down by `position` (keyword) or `location`.
+
+    by          : "position" | "location"
+    timeframe   : "7d" | "30d" | "all"
+    profile_id  : specific profile id string or "all"
+    profile_status: "active" | "inactive" | "cooldown" | "all"
+    """
+    if by not in ("position", "location"):
+        raise ValueError("by must be 'position' or 'location'")
+
+    # ── resolve matching profile IDs (respects profileId + profileStatus) ──────
+    allowed_ids = _matching_profile_ids(db, profile_id, profile_status)
+    if not allowed_ids:
+        return []
+
+    start_at = _timeframe_start(timeframe)
+
+    # ── choose grouping column ─────────────────────────────────────────────────
+    dim = LinkedinSearchContact.position if by == "position" else LinkedinSearchContact.location
+
+    # ── fetch all distinct dimension values (including NULL for position) ──────
+    dim_rows = (
+        db.query(dim)
+        .filter(LinkedinSearchContact.profile_id.in_(allowed_ids))
+        .distinct()
+        .all()
+    )
+
+    results = []
+    for (dim_val,) in dim_rows:
+        # For location table: skip NULL locations entirely
+        if by == "location" and not dim_val:
+            continue
+
+        # Base filter for this segment
+        base = [
+            LinkedinSearchContact.profile_id.in_(allowed_ids),
+            dim == dim_val,  # handles NULL correctly via SQLAlchemy == None → IS NULL
+        ]
+
+        # Connections sent
+        conn_q = db.query(func.count(LinkedinSearchContact.id)).filter(
+            *base,
+            LinkedinSearchContact.connection_sent.is_(True),
+        )
+        if start_at:
+            conn_q = conn_q.filter(LinkedinSearchContact.connection_sent_at >= start_at)
+        connections = conn_q.scalar() or 0
+
+        # Connections accepted
+        acc_q = db.query(func.count(LinkedinSearchContact.id)).filter(
+            *base,
+            LinkedinSearchContact.is_connected.is_(True),
+        )
+        if start_at:
+            acc_q = acc_q.filter(LinkedinSearchContact.connected_at >= start_at)
+        accepted = acc_q.scalar() or 0
+
+        acceptance_rate = round(accepted / connections * 100, 1) if connections > 0 else 0.0
+
+        # Pitches (messages) sent
+        pitch_q = (
+            db.query(func.count(SalesPitch.id))
+            .join(LinkedinSearchContact, SalesPitch.linkedin_search_contact_id == LinkedinSearchContact.id)
+            .filter(
+                *base,
+                SalesPitch.delivery_status == "sent",
+            )
+        )
+        if start_at:
+            pitch_q = pitch_q.filter(
+                func.coalesce(SalesPitch.delivered_at, SalesPitch.created_at) >= start_at
+            )
+        messages = pitch_q.scalar() or 0
+
+        # Replies received
+        reply_q = (
+            db.query(func.count(SalesPitch.id))
+            .join(LinkedinSearchContact, SalesPitch.linkedin_search_contact_id == LinkedinSearchContact.id)
+            .filter(
+                *base,
+                SalesPitch.reply_received.is_(True),
+            )
+        )
+        if start_at:
+            reply_q = reply_q.filter(
+                func.coalesce(SalesPitch.delivered_at, SalesPitch.created_at) >= start_at
+            )
+        replies = reply_q.scalar() or 0
+
+        reply_rate = round(replies / messages * 100, 1) if messages > 0 else 0.0
+
+        # Label: NULL position → "Network"
+        label = dim_val if dim_val else "Network"
+        key = label.lower().replace(" ", "_")
+
+        results.append({
+            "key": key,
+            "label": label,
+            "connections": connections,
+            "acceptanceRate": acceptance_rate,
+            "messages": messages,
+            "replies": replies,
+            "replyRate": reply_rate,
+        })
+
+    # Sort: named segments first (alphabetically), "Network" last
+    results.sort(key=lambda r: (r["label"] == "Network", r["label"]))
+    return results
+
+
+@router.get("/segment")
+def get_segment_performance(
+    by: str = Query(..., description="'position' or 'location'"),
+    timeframe: str = Query("30d"),
+    profile_id: str = Query("all", alias="profileId"),
+    profile_status: str = Query("all", alias="profileStatus"),
+    db: Session = Depends(get_db),
+):
+    try:
+        data = _build_segment(db, by, timeframe, profile_id, profile_status)
+        return success(data, f"Segment performance by {by} fetched successfully")
+    except ValueError as exc:
+        return error(str(exc), status_code=400)
+    except Exception as exc:
+        return error(f"Failed to fetch segment performance: {exc}")
+
+
+def _pct(numerator: int, denominator: int) -> float:
+    """Safe percentage capped at 100%."""
+    if denominator == 0:
+        return 0.0
+    return min(round(numerator / denominator * 100, 1), 100.0)
+
+
+def _build_conversions(
+    db: Session,
+    timeframe: str,
+    profile_id: str,
+    profile_status: str,
+) -> dict:
+    """
+    Stage-to-stage funnel conversion rates for the OverallConversion panel.
+
+    Steps:
+      1. Sent → Accepted   (connections_sent → is_connected)
+      2. Accepted → DM     (is_connected → sales_pitch delivered)
+      3. DM → Reply        (sales_pitch delivered → reply_received)
+      4. Overall: Sent → Reply
+
+    Filters: timeframe, profileId, profileStatus.
+    Lead → Connection is intentionally omitted — every contact in the table
+    has connection_sent=True, so that rate is always 100% and is meaningless.
+    """
+    allowed_ids = _matching_profile_ids(db, profile_id, profile_status)
+    if not allowed_ids:
+        return {
+            "sentToAccepted": 0.0,
+            "acceptedToDm": 0.0,
+            "dmToReply": 0.0,
+            "overallSentToReply": 0.0,
+            "rawCounts": {
+                "connectionsSent": 0,
+                "accepted": 0,
+                "dmsSent": 0,
+                "replies": 0,
+            },
+        }
+
+    start_at = _timeframe_start(timeframe)
+
+    # ── Connections sent ───────────────────────────────────────────────────────
+    sent_q = db.query(func.count(LinkedinSearchContact.id)).filter(
+        LinkedinSearchContact.profile_id.in_(allowed_ids),
+        LinkedinSearchContact.connection_sent.is_(True),
+    )
+    if start_at:
+        sent_q = sent_q.filter(LinkedinSearchContact.connection_sent_at >= start_at)
+    connections_sent = sent_q.scalar() or 0
+
+    # ── Connections accepted ───────────────────────────────────────────────────
+    accepted_q = db.query(func.count(LinkedinSearchContact.id)).filter(
+        LinkedinSearchContact.profile_id.in_(allowed_ids),
+        LinkedinSearchContact.is_connected.is_(True),
+    )
+    if start_at:
+        accepted_q = accepted_q.filter(LinkedinSearchContact.connected_at >= start_at)
+    accepted = accepted_q.scalar() or 0
+
+    # ── DMs (pitches) sent ────────────────────────────────────────────────────
+    dms_q = (
+        db.query(func.count(SalesPitch.id))
+        .join(LinkedinSearchContact, SalesPitch.linkedin_search_contact_id == LinkedinSearchContact.id)
+        .filter(
+            LinkedinSearchContact.profile_id.in_(allowed_ids),
+            SalesPitch.delivery_status == "sent",
+        )
+    )
+    if start_at:
+        dms_q = dms_q.filter(
+            func.coalesce(SalesPitch.delivered_at, SalesPitch.created_at) >= start_at
+        )
+    dms_sent = dms_q.scalar() or 0
+
+    # ── Replies received ───────────────────────────────────────────────────────
+    replies_q = (
+        db.query(func.count(SalesPitch.id))
+        .join(LinkedinSearchContact, SalesPitch.linkedin_search_contact_id == LinkedinSearchContact.id)
+        .filter(
+            LinkedinSearchContact.profile_id.in_(allowed_ids),
+            SalesPitch.reply_received.is_(True),
+        )
+    )
+    if start_at:
+        replies_q = replies_q.filter(
+            func.coalesce(SalesPitch.delivered_at, SalesPitch.created_at) >= start_at
+        )
+    replies = replies_q.scalar() or 0
+
+    return {
+        "sentToAccepted": _pct(accepted, connections_sent),
+        "acceptedToDm": _pct(dms_sent, accepted),
+        "dmToReply": _pct(replies, dms_sent),
+        "overallSentToReply": _pct(replies, connections_sent),
+        "rawCounts": {
+            "connectionsSent": connections_sent,
+            "accepted": accepted,
+            "dmsSent": dms_sent,
+            "replies": replies,
+        },
+    }
+
+
+@router.get("/conversions")
+def get_conversions(
+    timeframe: str = Query("30d"),
+    profile_id: str = Query("all", alias="profileId"),
+    profile_status: str = Query("all", alias="profileStatus"),
+    db: Session = Depends(get_db),
+):
+    try:
+        data = _build_conversions(db, timeframe, profile_id, profile_status)
+        return success(data, "Conversions fetched successfully")
+    except ValueError as exc:
+        return error(str(exc), status_code=400)
+    except Exception as exc:
+        return error(f"Failed to fetch conversions: {exc}")
+
+
+
+

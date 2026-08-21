@@ -52,30 +52,44 @@ def _handle_welcome_back_page(page) -> bool:
     IP/machine. LinkedIn recognises the account (shows the user's photo
     and name) but requires a single click on the account tile to continue.
 
-    Strategy — try several selectors in order of specificity:
+    Strategy — try selectors in order of specificity:
       1. Explicit aria-label / data-aut-id attributes LinkedIn has used historically
-      2. The first <button> inside the sign-in form (most robust fallback)
-      3. Any visible <button> whose text contains the word 'continue'
+      2. Class-based selectors observed in different LinkedIn UI versions
+      3. The profile-tile div/button (contains user's avatar/photo — not the 'Sign in using
+         another account' link which is a separate element below the tile)
+      4. First button in the sign-in form
 
-    Returns True if the click succeeded and we navigated away from /login.
+    NOTE: We intentionally do NOT fall back to `button:has-text('Sign in')` because on
+    this page that matches the "Sign in using another account" button, which redirects to
+    `/checkpoint/rm/sign-in-another-account` — an empty sign-in form — not back to feed.
+
+    Returns True if the click succeeded and we navigated to a valid LinkedIn page (/feed etc).
     Returns False if every selector fails (caller will raise SessionExpiredError).
     """
     logger.info("[LINKEDIN] 👋 'Welcome Back' page detected — attempting auto-click on account tile...")
 
-    # Selectors tried in priority order (most specific → most generic)
+    # Selectors tried in priority order (most specific → most generic).
+    # ⚠️  Do NOT add `button:has-text('Sign in')` here — it matches
+    #     "Sign in using another account" which leads to /checkpoint, not /feed.
     account_selectors = [
-        # LinkedIn-specific attributes seen in the wild
+        # LinkedIn-specific data attributes (most reliable when present)
         "[data-aut-id='account-picker-user-account']",
         "button[aria-label*='Sign in as']",
         "button[aria-label*='sign in as']",
-        # Class-based selectors observed in different LinkedIn UI versions
+        # Class-based selectors from different LinkedIn UI versions
         "button.sign-in-card--account",
         "div.sign-in-modal__account-btn",
         ".base-sign-in-hide-if-logged-in button",
-        # Generic fallbacks
-        "form button:first-of-type",          # first button in sign-in form
+        # Profile tile: a clickable element containing an <img> (user avatar) —
+        # this is the user's own account card, not the "Sign in using another account" link.
+        "div.sign-in-form__account-picker img",      # click the avatar inside the tile
+        "button:has(img)",                            # button wrapping the profile image
+        "div[role='button']:has(img)",                # div tile wrapping the profile image
+        # Continue button (sometimes used instead of profile tile click)
         "button:has-text('Continue')",
-        "button:has-text('Sign in')",
+        # First button in the form — safe only if the "Sign in using another account"
+        # link is rendered as an anchor (<a>), not a <button>.
+        "form button:first-of-type",
     ]
 
     for selector in account_selectors:
@@ -84,12 +98,19 @@ def _handle_welcome_back_page(page) -> bool:
             if btn.count() > 0 and btn.is_visible(timeout=2000):
                 logger.info(f"[LINKEDIN] 🖱️  Clicking account tile ({selector})")
                 btn.click()
-                # Wait until we leave the /login / /uas namespace
+                # Wait until we reach a real LinkedIn page.
+                # We also exclude /checkpoint because clicking "Sign in using another
+                # account" lands there — that is NOT a successful bypass.
                 page.wait_for_url(
-                    lambda u: "/login" not in u and "/uas" not in u,
+                    lambda u: (
+                        "/login" not in u
+                        and "/uas" not in u
+                        and "/checkpoint" not in u
+                    ),
                     timeout=20000,
                 )
-                logger.info(f"[LINKEDIN] ✅ Welcome Back bypassed → {page.url}")
+                final_url = page.url
+                logger.info(f"[LINKEDIN] ✅ Welcome Back bypassed → {final_url}")
                 _rand_delay(1.5, 2.5)   # brief pause after redirect
                 return True
         except Exception:
@@ -179,6 +200,74 @@ def _check_session(page) -> None:
             "   Re-run:  python linkedin_login.py --profile <id>\n"
             "   Then retry the LinkedIn search.\n"
         )
+
+
+def _dismiss_feed_popups(page) -> None:
+    """
+    Dismiss any promotional / upsell modal or overlay that LinkedIn injects
+    on the feed page after login.  Currently handles:
+
+    * LinkedIn Premium trial offer  ("Try Premium for ₹0", "Try Premium for free",
+      "looking to drive more leads?", etc.)
+    * Sales Navigator promotional card
+    * Cookie / GDPR consent banners
+    * Generic artdeco modal dismiss buttons
+
+    This is a best-effort, fire-and-forget function — it never raises.
+    """
+    close_selectors = [
+        # Premium upsell modal dismiss / close button
+        "button[aria-label='Dismiss']",
+        "button[aria-label='dismiss']",
+        "button.artdeco-modal__dismiss",
+        "button[data-test-modal-close-btn]",
+        # Generic ✕ / close icons used across LinkedIn modals
+        "svg[data-test-icon='close-medium'] >> xpath=..",   # parent button of ✕ icon
+        "button:has(svg[data-test-icon='close-medium'])",
+        "button:has(svg[data-test-icon='close-small'])",
+        # Inline promo-card dismiss
+        "div.search-norms-disclaimer__dismiss-btn button",
+        # Cookie / GDPR banner
+        "button[action-type='DENY']",
+        "button:has-text('Reject')",
+        "button:has-text('Accept')",
+        # Any button explicitly labelled 'Close' or 'Dismiss' (case-insensitive)
+        "button:has-text('Close')",
+        "button:has-text('Dismiss')",
+        # Premium modal: the large ✕ in the top-right corner
+        ".premium-upsell-modal button[aria-label*='Close']",
+        ".premium-upsell-modal button[aria-label*='Dismiss']",
+        # Catch-all: any visible ✕ button inside a modal/dialog
+        "div[role='dialog'] button[aria-label*='Dismiss']",
+        "div[role='dialog'] button[aria-label*='Close']",
+    ]
+
+    dismissed_any = False
+    for sel in close_selectors:
+        try:
+            btns = page.locator(sel).all()
+            for btn in btns[:2]:          # at most 2 per selector to avoid loops
+                try:
+                    if btn.is_visible(timeout=500):
+                        btn.click(force=True)
+                        _rand_delay(0.3, 0.6)
+                        dismissed_any = True
+                        logger.info(f"[LINKEDIN] 🗙  Dismissed popup via: {sel}")
+                except Exception:
+                    pass
+        except Exception:
+            continue
+
+    # If nothing was found via click, try Escape as a last resort
+    if not dismissed_any:
+        try:
+            # Only press Escape if a dialog/modal is actually open
+            if page.locator("div[role='dialog']:visible").count() > 0:
+                page.keyboard.press("Escape")
+                _rand_delay(0.3, 0.5)
+                logger.info("[LINKEDIN] 🗙  Pressed Escape to dismiss open dialog")
+        except Exception:
+            pass
 
 
 def _compute_confidence(headline: str) -> str:
@@ -271,6 +360,7 @@ def find_linkedin_playwright(company: str, business_client_id: int, db: Session,
             page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=45000)
             _rand_delay(2, 4)
             _check_session(page)
+            _dismiss_feed_popups(page)   # close any Premium/promo modal before proceeding
             logger.info("[LINKEDIN] ✅ Session valid")
 
             ## Search for the company

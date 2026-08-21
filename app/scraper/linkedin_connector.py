@@ -17,6 +17,7 @@ from app.scraper.linkedin_finder import (
     LinkedInSessionExpiredError,
     _rand_delay,
     _check_session,
+    _dismiss_feed_popups,
 )
 import json
 from app.models.profile_setting import ProfileSetting
@@ -90,6 +91,7 @@ def send_connection_requests(
             page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=30000)
             _rand_delay(2, 3)
             _check_session(page)
+            _dismiss_feed_popups(page)   # close Premium / promo modal if present
             logger.info("[CONNECTOR] ✅ Session valid")
 
             for contact in contacts:
@@ -214,6 +216,7 @@ def send_daily_global_connections(
             page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=30000)
             _rand_delay(2, 3)
             _check_session(page)
+            _dismiss_feed_popups(page)   # close Premium / promo modal if present
             logger.info("[CONNECTOR BATCH] ✅ Session valid")
 
             for contact in contacts:

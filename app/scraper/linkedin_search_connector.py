@@ -40,6 +40,7 @@ from app.scraper.linkedin_finder import (
     LinkedInSessionExpiredError,
     _rand_delay,
     _check_session,
+    _dismiss_feed_popups,
 )
 from app.utils.logger import logger
 
@@ -971,6 +972,7 @@ def run_linkedin_search_and_send_connections(
             page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=30000)
             _rand_delay(2, 3)
             _check_session(page)
+            _dismiss_feed_popups(page)   # close Premium / promo modal if present
             logger.info(f"[SEARCH CONNECTOR] ✅ Session valid for profile {profile_id}")
 
             # Phase 1: search connections

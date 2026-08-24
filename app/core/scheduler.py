@@ -456,18 +456,18 @@ def schedule_jobs():
     logger.info(f"[SCHEDULER] Pitch delivery job scheduled at {delivery_hour:02d}:{delivery_minute:02d} daily.")
 
     # ---- LinkedIn Reply Check Job (Hybrid: inbox scan + targeted thread check) ----
-    reply_interval_hours = int(os.getenv("REPLY_CHECK_INTERVAL_HOURS", "4"))
+    reply_interval_minutes = int(os.getenv("REPLY_CHECK_INTERVAL_MINUTES", "4"))
     _scheduler.add_job(
         make_tracked_job(scheduled_pitch_reply_check, job_id="periodic_pitch_reply_check", job_name="Pitch Reply Check", max_retries=1, retry_delay_sec=linkedin_retry_delay),
         "interval",
-        minutes=reply_interval_hours,
+        minutes=reply_interval_minutes,
         id="periodic_pitch_reply_check",
         replace_existing=True,
         jitter=45,
     )
-    logger.info(f"[SCHEDULER] Pitch reply check job scheduled every {reply_interval_hours} minute(s).")
+    logger.info(f"[SCHEDULER] Pitch reply check job scheduled every {reply_interval_minutes} minute(s).")
 
-    followup_interval_hours = int(os.getenv("FOLLOWUP_REPLY_CHECK_INTERVAL_HOURS", str(reply_interval_hours)))
+    followup_interval_minutes = int(os.getenv("FOLLOWUP_REPLY_CHECK_INTERVAL_MINUTES", str(reply_interval_minutes)))
     _scheduler.add_job(
         make_tracked_job(
             scheduled_followup_reply_check,
@@ -477,12 +477,12 @@ def schedule_jobs():
             retry_delay_sec=linkedin_retry_delay,
         ),
         "interval",
-        minutes=followup_interval_hours,
+        minutes=followup_interval_minutes,
         id="periodic_followup_reply_check",
         replace_existing=True,
         jitter=60,
     )
-    logger.info(f"[SCHEDULER] Follow-up reply check job scheduled every {followup_interval_hours} minute(s).")
+    logger.info(f"[SCHEDULER] Follow-up reply check job scheduled every {followup_interval_minutes} minute(s).")
 
     # ---- Telegram Action Poller (polls bridge API for pending actions) ----
     telegram_poll_interval_sec = int(os.getenv("TELEGRAM_POLLER_INTERVAL_SEC", "60"))

@@ -25,7 +25,7 @@ from app.core.llm_provider import get_llm
 from app.services.sales_pitch_service import _has_provider_key
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
-from sqlalchemy import exists, case
+from sqlalchemy import exists, case, func
 
 
 def generate_suggested_reply(
@@ -223,7 +223,8 @@ def _cfg() -> dict:
         # Only re-check pitches whose reply_checked_at is older than this many hours
         "recheck_hours": int(os.getenv("REPLY_RECHECK_HOURS", "4")),
         # Maximum pitches to check per run (avoid long Playwright sessions)
-        "max_per_run": int(os.getenv("REPLY_MAX_PER_RUN", "20")),
+        # Default raised to 50 so all 179+ pitches cycle through in ~4 runs
+        "max_per_run": int(os.getenv("REPLY_MAX_PER_RUN", "50")),
         # Delay between each contact check (seconds) — reduces LinkedIn bot risk
         "delay_between": float(os.getenv("REPLY_CHECK_DELAY_SEC", "10.0")),
         # Maximum scrolls on the inbox page
@@ -251,7 +252,25 @@ def _mark_checked_no_reply(pitch: SalesPitch, db: Session) -> None:
 def _fetch_checkable_pitches(
     db: Session, recheck_hours: int, max_per_run: int
 ) -> list[SalesPitch]:
+    """
+    Fetch pitches eligible for reply checking using a fair round-robin strategy:
+
+    Priority 1 — Never-checked pitches (reply_checked_at IS NULL).
+                  These are randomised so no single delivery date is always
+                  favoured when the batch size is smaller than the pool.
+    Priority 2 — Previously-checked pitches whose recheck window has elapsed,
+                  ordered oldest-checked-first (normal rotation).
+
+    This ensures every pitch, regardless of its delivered_at date, is visited
+    within a predictable number of runs as the pitch count grows.
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=recheck_hours)
+
+    # NULL-first flag: 0 = never checked (top priority), 1 = already checked
+    null_priority = case(
+        (SalesPitch.reply_checked_at.is_(None), 0),
+        else_=1,
+    )
 
     return (
         db.query(SalesPitch)
@@ -264,7 +283,17 @@ def _fetch_checkable_pitches(
                 | (SalesPitch.reply_checked_at < cutoff)
             ),
         )
-        .order_by(SalesPitch.delivered_at.asc())
+        # Never-checked pitches first (randomised among themselves so every
+        # pitch gets a fair chance regardless of delivered_at order).
+        # Already-checked pitches follow, oldest-checked first.
+        .order_by(
+            null_priority.asc(),
+            case(
+                (SalesPitch.reply_checked_at.is_(None), func.rand()),
+                else_=None,
+            ).asc(),
+            SalesPitch.reply_checked_at.asc(),
+        )
         .limit(max_per_run)
         .all()
     )

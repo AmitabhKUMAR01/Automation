@@ -1,175 +1,98 @@
-# AI-Powered B2B Lead Generator & Scraper
+# Job Outreach Pipeline
 
-A robust web scraping and lead generation application built with FastAPI, SQLAlchemy, and Playwright. It extracts business information from Google Maps, performs deep website audits, calculates lead scores, and leverages AI (LLMs) to generate personalized sales pitches.
+Python pipeline for job seekers: find LinkedIn hiring posts → extract recruiter emails →
+score against your resume → draft personalized emails → human review → send via Gmail.
 
-## Core Features
+## Stages
 
-- **Google Maps Scraping**: Periodically scrapes businesses based on configured categories and locations.
-- **Deep Website Auditing**: Analyzes scraped websites for SEO issues, broken links, mobile responsiveness, and speed metrics.
-- **Smart Lead Scoring**: Automatically grades leads (A-F) based on their website health and identifies key pain points.
-- **AI Sales Pitch Generation**: Dynamically generates personalized, high-converting outreach pitches using Multiple LLM providers (Gemini, Claude, OpenAI, Groq).
-  - Evaluates whether the lead has a LinkedIn contact profile to decide between LinkedIn DM or Email formatting.
-- **Automatic Pitch Delivery**: A scheduled background worker delivers generated pitches:
-  - **Email**: Sent via SMTP (with delay throttles and retry state machine).
-  - **LinkedIn DMs**: Sends DMs using a Playwright browser automation script, extracting direct compose URNs from connection profile cards to avoid name ambiguities.
-- **Multi-Profile LinkedIn Architecture**: Run multiple LinkedIn accounts simultaneously! Session states and concurrency settings are managed directly in the MySQL database. 
-  - Manage accounts via a full CRUD REST API.
-  - Pin-point control over which scraping processes run on which profile (`allowed_processes`).
-- **LinkedIn Connection Pipeline**: Orchestrates discovery, friend requesting, and checking acceptance to safely transition cold leads to connected outreach channels.
-- **Quota & Cost Management**: Configurable rule-based pitch generation to skip LLM calls for low-priority/high-scoring leads.
-- **Centralized Logging**: Clean daily rotating log files stored in `logs/` instead of stdout terminal noise.
-- **Task Scheduling**: Integrated APScheduler for background job execution and batched orchestrations.
+1. `ingest` — Apify LinkedIn posts (pluggable `Source`)
+2. `parse` — regex emails + LLM structured fields
+3. `enrich` — optional Hunter/Apollo lookup (`enrich.enabled`)
+4. `match` — resume score 0–100
+5. `compose` — personalized draft → `pending_review`
+6. `send` — approval queue + throttled Gmail
 
-## Nightly Data & Delivery Pipeline
+## Setup
 
-To ensure dependencies resolve correctly (e.g. knowing a contact exists before scoring a pitch, and ensuring connection status is synced before delivery), jobs run in the following chronological order:
-
-```mermaid
-graph TD
-    A[01:00 - Website Audit] --> B[02:00 - LinkedIn Search]
-    B --> C[03:00 - Lead Scoring / Pitch Gen]
-    C --> D[04:00 - LinkedIn Connections]
-    D --> E[12:00 - LI Acceptance Check]
-    E --> F[14:00 - Pitch Delivery]
-    F --> G[16:00 - Pitch Reply Check]
+```powershell
+$env:Path = "$env:USERPROFILE\.local\bin;" + $env:Path
+cd D:\web-scrapping\web-scrapping
+uv sync --extra dev
+copy .env.example .env
 ```
 
-1. **01:00 - Website Audit**: Runs checks on websites of scraped businesses.
-2. **02:00 - LinkedIn Search**: Finds matching LinkedIn personal profiles for lead companies.
-3. **03:00 - Lead Scoring & Pitch Generation**: Generates scores and personalizes pitches. Pitch format auto-targets LinkedIn if a profile was found, otherwise defaults to Email.
-4. **04:00 - LinkedIn Connections**: Sends connection invites to found LinkedIn contacts.
-5. **12:00 - LinkedIn Acceptance Check**: Syncs which pending requests were accepted (marks `is_connected=True`).
-6. **14:00 - Pitch Delivery**: Delivers pending emails immediately, and LinkedIn DMs to newly-connected contacts. Unconnected pitches wait for the next cycle.
-7. **16:00 - Pitch Reply Check**: Monitors LinkedIn DM threads to see if leads have responded to your pitch.
+Fill `.env`:
 
+- `OPENAI_API_KEY` (or Anthropic)
+- `APIFY_API_TOKEN`
+- `GMAIL_SENDER` (your address)
+- Optional: `HUNTER_API_KEY` / `APOLLO_API_KEY` for enrich
 
-## Prerequisites
+Put OAuth Desktop client JSON at `credentials/gmail_client_secrets.json`.
 
-- Python 3.9+
-- MySQL Server
-- Playwright browsers (Chromium)
+Put your resume at `resume/resume.txt` or `resume/resume.pdf` (see `config.yaml`).
 
-## Installation
+Edit `config.yaml` — especially `ingest.target_roles` and `match.score_cutoff`.
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://gitlab.com/ankitscode/web-scrapping.git
-   cd web-scrapping
-   ```
+## Commands
 
-2. **Create a virtual environment**:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Install Playwright browsers**:
-   ```bash
-   playwright install chromium
-   ```
-
-## Configuration
-
-### Environment Variables
-
-Copy `.env.example` to `.env` and configure your database, scheduler, LLM API Keys, and other settings:
-
-```bash
-cp .env.example .env
+```powershell
+uv run pipeline --help
+uv run pipeline status
+uv run pipeline run --dry-run
+uv run pipeline ingest
+uv run pipeline parse
+uv run pipeline enrich          # only if enrich.enabled=true
+uv run pipeline match
+uv run pipeline compose
+uv run pipeline review          # a/e/r/b/s/q on each draft
+uv run pipeline send --dry-run
+uv run pipeline send            # approved only; business hours + throttle
 ```
 
-Key environment configurations:
-- **Database**: `DATABASE_URL` (MySQL).
-- **Google Sheets Integration**: `GOOGLE_SHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_EMAIL`.
-- **AI / LLM Settings**:
-  - `LLM_PROVIDER`: Select the AI model provider (`gemini`, `openai`, `claude`, `groq`).
-  - `PITCH_LLM_MIN_GRADE`: Only generate AI pitches for leads at or below this grade (e.g., `C`).
-- **Profile Concurrency**:
-  - `MAX_CONCURRENT_PROFILES`: Control how many Playwright browsers can run at the same time to save memory.
+## Full dry-run walkthrough
 
-### Scraper Settings
-Modify `app/config/scraper_settings.json` to configure the schedule and target jobs:
+1. **Preview ingest** (no Apify spend):
+   ```powershell
+   uv run pipeline ingest --dry-run
+   ```
+2. **Live ingest** (uses Apify credits):
+   ```powershell
+   uv run pipeline ingest
+   uv run pipeline status
+   ```
+3. **Parse**:
+   ```powershell
+   uv run pipeline parse --dry-run
+   uv run pipeline parse
+   ```
+4. **Match + compose** (needs resume file):
+   ```powershell
+   uv run pipeline match
+   uv run pipeline compose
+   ```
+5. **Review** (required while `require_approval: true`):
+   ```powershell
+   uv run pipeline review
+   ```
+   Keys: `a` approve · `e` edit · `r` reject · `b` reject+blacklist company · `s` skip · `q` quit
+6. **Send dry-run**, then live (weekdays, business hours, max 25/day, 45–180s gaps):
+   ```powershell
+   uv run pipeline send --dry-run
+   uv run pipeline send
+   ```
 
-```json
-{
-    "schedule_times": ["08:00", "15:00", "18:00"],
-    "jobs": [
-        { "category": "Gyms", "city": "New York", "state": "NY", "country": "United States" }
-    ]
-}
+First live Gmail send opens a browser for OAuth; token is saved to `credentials/gmail_token.json`.
+
+## Safety
+
+- Secrets only in `.env` (never commit)
+- `require_approval: true` by default
+- Never emails the same address twice within 60 days (`recipient_cooldowns` UNIQUE)
+- Enrich never invents `first.last@domain` patterns — low-confidence results are discarded
+
+## Tests
+
+```powershell
+uv run pytest -q
 ```
-
-## Database Setup
-
-1. **Create the database**:
-   Ensure your MySQL server is running and create the database named in your `.env`.
-
-2. **Run migrations**:
-   ```bash
-   alembic upgrade head
-   ```
-
-## Managing LinkedIn Profiles
-
-You can add, edit, and configure your LinkedIn profiles directly through the API.
-1. Authenticate your session using the Python save state script (it will dump the JSON state).
-2. Create a new profile via the `POST /profile-settings/` API endpoint and paste the session JSON.
-3. Configure `allowed_processes` to strictly limit what jobs this profile can execute (e.g., `["daily_linkedin_search", "daily_linkedin_connections"]`).
-
-## Running the Application
-
-Start the FastAPI development server:
-```bash
-fastapi dev main.py
-```
-*(Or use `uvicorn main:app --reload`)*
-
-The scheduler will automatically start and run jobs at the configured times in the background.
-
-## Running the Frontend
-
-The project includes a TypeScript-based web user interface located in the `frontend` folder.
-
-1. **Navigate to the frontend directory**:
-   ```bash
-   cd frontend
-   ```
-
-2. **Install frontend dependencies**:
-   ```bash
-   npm install
-   ```
-
-3. **Start the development server**:
-   ```bash
-   npm run dev
-   ```
-
-4. **Build for production** (optional):
-   ```bash
-   npm run build
-   ```
-
-## API Documentation
-
-- **Swagger UI**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-- **Redoc**: [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
-
-## Project Structure
-
-- `app/`: Main application logic.
-  - `config/`: Database and scraper settings.
-  - `core/`: Scheduler, LLM provider factory, Prompts, and base utilities.
-  - `models/`: SQLAlchemy database models (including `ProfileSetting`).
-  - `router/`: FastAPI API endpoints (Audits, Leads, Webhooks, Profile Settings).
-  - `services/`: Business logic, lead scoring, and LLM pitch orchestration.
-  - `scraper/`: Low-level scraping implementation using Playwright (Google Maps, LinkedIn, Website Crawler).
-  - `utils/`: Loggers, API formatters.
-- `alembic/`: Database migration scripts and configuration.
-- `logs/`: Application generated daily log files.
-- `main.py`: Application entry point.

@@ -1,59 +1,36 @@
-# Env files
+# Secrets
 .env
-.env.backup
-.env.production
+.env.local
+.env.*.local
+credentials.json
+token.json
+*.oauth.json
 
-# Virtual environment
+# Python
+.venv/
 venv/
-
-# Python cache
 __pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# System files
+# Runtime data
+data/*.db
+data/*.db-*
+logs/
+*.log
+
+# OS / editor
 .DS_Store
 Thumbs.db
-
-# Scheduler tracker
-app/core/last_job_tracker.json
-
 .vscode/
-pyrefly.toml
+.idea/
 
-# Playwright session state (contains sensitive cookies!)
-storage_state.json
-
-# Frontend
-frontend/**/*.log
-frontend/**/npm-debug.log*
-frontend/**/yarn-debug.log*
-frontend/**/yarn-error.log*
-frontend/**/pnpm-debug.log*
-frontend/**/lerna-debug.log*
-
-frontend/node_modules
-frontend/dist
-frontend/dist-ssr
-frontend/.output
-frontend/.vinxi
-frontend/.tanstack/**
-frontend/.nitro
-frontend/*.local
-
-# Frontend Wrangler / Cloudflare
-frontend/.wrangler/
-frontend/.dev.vars
-
-# Frontend Editor directories and files
-frontend/.vscode/*
-!frontend/.vscode/extensions.json
-frontend/.idea
-frontend/*.suo
-frontend/*.ntvs*
-frontend/*.njsproj
-frontend/*.sln
-frontend/*.sw?
-
-
-
-
-
+# Resume / personal files (keep path in config, not the file)
+resume/*.pdf
+!resume/.gitkeep

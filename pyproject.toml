@@ -1,0 +1,46 @@
+[project]
+name = "job-outreach"
+version = "0.1.0"
+description = "Job-outreach automation pipeline: LinkedIn hiring posts → personalized Gmail applications"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "google-api-python-client>=2.130.0",
+    "google-auth-httplib2>=0.2.0",
+    "google-auth-oauthlib>=1.2.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "pypdf>=4.2.0",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0.1",
+    "rich>=13.7.0",
+    "sqlmodel>=0.0.22",
+    "structlog>=24.1.0",
+    "tenacity>=8.3.0",
+    "typer>=0.12.0",
+    "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[project.scripts]
+pipeline = "outreach.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/outreach"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+
+[tool.uv]
+package = true

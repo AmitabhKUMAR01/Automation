@@ -1,0 +1,60 @@
+AMITABH KUMAR
+Full-Stack Developer (React / Next.js / Node.js)
++91 7983964500  |  amitabhkumarcontact@gmail.com  |  Portfolio  |  GitHub
+PROFILE
+Full-Stack Developer with 2 years of professional experience building production-grade web applications and scalable APIs. 
+Experienced across modern React/Next.js architectures, Node.js backend systems, PostgreSQL, Redis, and real-time workflows. 
+Regularly engage directly with clients to understand requirements and translate them into working solutions, staying focused on 
+clean architecture, performance, reliability, and maintainable systems.
+SKILLS
+Languages: JavaScript, TypeScript
+Frontend: React, Next.js, Redux Toolkit, React Query, Framer Motion, Tailwind CSS, HTML5, CSS3, SCSS
+Backend & Data: Node.js, Express, NestJS, Go, Drizzle ORM, PostgreSQL, MongoDB, Supabase, Firebase, Redis, SQL, IndexedDB
+Tools & Practices: Git, GitHub, Docker, Postman, JIRA, REST API design, Real-Time Systems (Socket.io, Liveblocks), PWA / Service 
+Workers
+EXPERIENCE
+Full-Stack Developer | Hanging Panda
+Nov 2024 - Present
+• Deliver feature-rich, production applications end to end across the stack, working with Supabase, NestJS, Drizzle ORM, and Firebase 
+for backend services.
+• Build real-time connectivity features that keep multi-user applications fast and consistent under concurrent use.
+• Own projects from planning through deployment, consistently meeting deadlines while maintaining a seamless user experience.
+• Engage directly with clients to gather and clarify requirements, translating them into scoped, maintainable technical solutions.
+• Partner with design and backend teams to translate requirements into scalable, maintainable code.
+Web Development Intern | Hanging Panda
+Aug 2024 - Nov 2024
+• Developed responsive, user-centric web applications with React and Next.js, with a focus on performance and usability.
+• Built and maintained a reusable component library with Tailwind CSS and SCSS, establishing a consistent design system.
+• Collaborated with backend developers to integrate RESTful APIs, ensuring reliable, low-latency data exchange.
+PROJECTS
+Artefact — Real-Time Collaborative Document Editor
+Next.js 15, TypeScript, Supabase, Liveblocks, Tiptap Editor, OpenAI API | tryartefact.com
+Nov 2024 - Mar 2025
+• Built a Google Docs-style collaboration platform enabling seamless multi-user document editing in real time.
+• Implemented real-time sync with Liveblocks to support concurrent editing across multiple users without conflicts.
+• Integrated the OpenAI API to bring AI-assisted writing capabilities directly into the editor.
+• Configured Tiptap Editor for rich-text formatting and flexible document customization; used Supabase for authentication, real-time 
+data syncing, and database management.
+Rehab CEOs Meta Ads Tool — Ad Monitoring & Management Platform
+Mar 2025 - June 2025
+Next.js 14 (App Router), TypeScript, NestJS, Drizzle ORM, Redis, Tailwind CSS, shadcn/ui | meta.rehabceos.com
+• Built a full-stack platform for rehabilitation centers and executives to track and optimize Meta (Facebook) ad campaigns.
+• Designed a responsive, user-friendly interface for tracking campaigns, metrics, and alerts at a glance; developed REST APIs to serve 
+campaign, metrics, and alert data to the frontend.
+• Used Drizzle ORM with SQL for efficient, type-safe data access and modeling.
+ZenDeFi — AI-Powered Crypto Trading SaaS
+Next.js 15, TypeScript, Express, Go, MongoDB, Redis, Socket.io, Binance API, ethers.js | zendefi.cloud
+Jul 2025 - Jul 2026
+• Built an AI-powered crypto trading SaaS automating spot trading with configurable cover/pullback strategies in live and simulation 
+modes.
+• Engineered a Go bot supervisor using concurrent goroutines, Binance websockets, and Redis price feeds to run multiple trading 
+bots efficiently without per-process overhead.
+• Integrated the Binance API for real-time market orders, historical simulation, and risk-controlled automated execution across user
+configured strategies.
+• Implemented multi-chain deposit wallets (BEP-20, TRC-20, Solana) with KYC-gated creation, SSE transaction streams, and sweep-to
+central-wallet flows.
+• Used MongoDB and Redis for persistent bot state, trade history, caching, and real-time dashboard sync via Socket.io.
+EDUCATION
+Bachelor of Computer Applications (BCA)
+Sep 2021 - Jul 2024
+Mahatma Jyotiba Phule Rohilkhand University | Score: 70%

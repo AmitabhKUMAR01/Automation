@@ -1,0 +1,61 @@
+# Job-outreach pipeline configuration
+# Secrets stay in .env — never put API keys here.
+
+ingest:
+  source: apify  # apify | csv
+  lookback_days: 7
+  search_terms:
+    - "hiring"
+    - "we are looking for"
+    - "we're hiring"
+    - "open role"
+  target_roles:
+    - "full stack"
+    - "fullstack"
+    - "react developer"
+    - "node.js"
+  max_posts_per_run: 40
+  csv_path: fixtures/sample_posts.csv  # used when source: csv
+
+parse:
+  llm_retries: 1
+
+enrich:
+  enabled: false  # set true + HUNTER_API_KEY to resolve emails for needs_enrichment posts
+  provider: hunter  # hunter | apollo
+  min_confidence: 0.7
+  target_titles:
+    - recruiter
+    - talent
+    - "human resources"
+    - "hiring manager"
+    - "talent acquisition"
+
+match:
+  resume_path: resume/resume.txt  # switch to resume/resume.pdf when you add your PDF
+  score_cutoff: 60  # 0-100; posts below this are skipped
+
+compose:
+  max_words: 150
+  your_name: "Amitabh Kumar"
+  your_headline: "Full-Stack Developer (React / Next.js / Node.js)"
+
+send:
+  require_approval: true  # must be explicitly set to false to auto-send
+  resume_attachment_path: resume/resume.txt
+  max_sends_per_day: 25
+  delay_seconds_min: 45
+  delay_seconds_max: 180
+  timezone: "Asia/Kolkata"
+  business_hours:
+    start: "09:00"
+    end: "18:00"
+  weekdays_only: true
+  email_cooldown_days: 60
+
+llm:
+  temperature: 0.2
+  timeout_seconds: 60
+
+database:
+  path: data/outreach.db

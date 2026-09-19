@@ -8,7 +8,6 @@ from outreach.config import get_settings
 from outreach.db.models import Post, PostStatus, utcnow
 from outreach.db.session import session_scope
 from outreach.ingest.sources import get_source
-from outreach.ingest.sources.apify import ApifyLinkedInSource, build_keyword
 from outreach.logging import get_logger
 from outreach.protocols import RawPost
 from outreach.stages import StageResult
@@ -57,7 +56,9 @@ def run(*, dry_run: bool = False) -> StageResult:
     source = get_source(settings)
     details: list[str] = [f"source={source.name}"]
 
-    if isinstance(source, ApifyLinkedInSource):
+    if source.name == "apify":
+        from outreach.ingest.sources.apify import build_keyword
+
         keyword = build_keyword(
             settings.config.ingest.search_terms,
             settings.config.ingest.target_roles,
@@ -66,9 +67,15 @@ def run(*, dry_run: bool = False) -> StageResult:
         details.append(f"lookback_days={settings.config.ingest.lookback_days}")
         details.append(f"max_posts={settings.config.ingest.max_posts_per_run}")
         details.append(f"actor={settings.secrets.apify_actor_id}")
+    elif source.name == "linkedin_feed":
+        cfg = settings.config.ingest
+        details.append(f"max_posts={cfg.max_posts_per_run}")
+        details.append(f"max_scrolls={cfg.feed_max_scrolls}")
+        details.append(f"storage={cfg.linkedin_storage_state}")
+        details.append(f"headless={cfg.linkedin_headless}")
 
     if dry_run:
-        details.append("dry-run: no Apify/CSV fetch, no DB writes")
+        details.append("dry-run: no external fetch, no DB writes")
         return StageResult(stage="ingest", dry_run=True, details=details)
 
     try:

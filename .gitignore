@@ -34,3 +34,8 @@ Thumbs.db
 # Resume / personal files (keep path in config, not the file)
 resume/*.pdf
 !resume/.gitkeep
+
+# LinkedIn / Gmail session secrets
+credentials/linkedin_storage_state.json
+credentials/gmail_token.json
+credentials/gmail_client_secrets.json

@@ -5,12 +5,40 @@ score against your resume → draft personalized emails → human review → sen
 
 ## Stages
 
-1. `ingest` — Apify LinkedIn posts (pluggable `Source`)
+1. `ingest` — LinkedIn personal feed (Playwright) and/or Apify search (pluggable `Source`)
 2. `parse` — regex emails + LLM structured fields
 3. `enrich` — optional Hunter/Apollo lookup (`enrich.enabled`)
 4. `match` — resume score 0–100
 5. `compose` — personalized draft → `pending_review`
 6. `send` — approval queue + throttled Gmail
+
+## LinkedIn personal feed (recommended)
+
+Your connections' hiring posts often beat keyword search.
+
+```powershell
+uv sync --extra dev
+uv run playwright install chromium
+uv run pipeline linkedin-login    # log in once in the browser window
+```
+
+`config.yaml` already has `ingest.source: linkedin_feed`. Then:
+
+```powershell
+uv run pipeline ingest            # scrolls your Home feed, keeps hiring posts
+uv run pipeline parse
+uv run pipeline match
+uv run pipeline compose
+uv run pipeline review
+uv run pipeline send
+```
+
+Session file: `credentials/linkedin_storage_state.json` (gitignored).  
+If LinkedIn asks you to log in again: re-run `linkedin-login`.
+
+**Risk:** automating LinkedIn can restrict accounts — keep `max_posts_per_run` low and don't run 24/7.
+
+To switch back to Apify keyword search: set `ingest.source: apify`.
 
 ## Setup
 

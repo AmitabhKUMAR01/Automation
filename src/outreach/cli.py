@@ -204,6 +204,25 @@ def cmd_status(
     console.print(table)
 
 
+@app.command("linkedin-login")
+def cmd_linkedin_login(
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    config: Optional[str] = typer.Option(None, "--config"),
+    timeout: int = typer.Option(300, "--timeout", help="Seconds to wait for manual login"),
+) -> None:
+    """Open a browser, log into LinkedIn once, save session for feed ingest."""
+    _common_options(False, verbose, config)
+    from outreach.ingest.sources.linkedin_feed import ensure_logged_in_session
+
+    settings = get_settings()
+    path = ensure_logged_in_session(settings, timeout_seconds=timeout)
+    console.print(f"Saved LinkedIn session to {path}", markup=False)
+    console.print(
+        "Set ingest.source: linkedin_feed in config.yaml, then: uv run pipeline ingest",
+        markup=False,
+    )
+
+
 @app.command("init-db")
 def cmd_init_db(
     verbose: bool = typer.Option(False, "--verbose", "-v"),

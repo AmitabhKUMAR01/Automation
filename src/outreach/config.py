@@ -26,6 +26,13 @@ class IngestConfig(BaseModel):
     target_roles: list[str] = Field(default_factory=list)
     max_posts_per_run: int = 50
     csv_path: str = "fixtures/sample_posts.csv"
+    # LinkedIn personal feed (Playwright)
+    linkedin_storage_state: str = "credentials/linkedin_storage_state.json"
+    linkedin_headless: bool = False  # visible browser is safer for LinkedIn challenges
+    feed_max_scrolls: int = 12
+    feed_scroll_pause_min: float = 2.0
+    feed_scroll_pause_max: float = 4.5
+    feed_navigation_timeout_ms: int = 60000
 
 
 class ParseConfig(BaseModel):

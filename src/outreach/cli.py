@@ -152,12 +152,17 @@ def cmd_compose(
 @app.command("send")
 def cmd_send(
     dry_run: bool = typer.Option(False, "--dry-run"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Bypass business-hours check (for testing only)",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     config: Optional[str] = typer.Option(None, "--config"),
 ) -> None:
     """Send approved drafts via Gmail (throttled)."""
     _common_options(dry_run, verbose, config)
-    _print_result(send.run(dry_run=dry_run))
+    _print_result(send.run(dry_run=dry_run, force=force))
 
 
 @app.command("review")

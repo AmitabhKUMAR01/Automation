@@ -25,7 +25,7 @@ from outreach.stages import StageResult
 log = get_logger("send")
 
 
-def run(*, dry_run: bool = False) -> StageResult:
+def run(*, dry_run: bool = False, force: bool = False) -> StageResult:
     settings = get_settings()
     cfg = settings.config.send
 
@@ -60,6 +60,7 @@ def run(*, dry_run: bool = False) -> StageResult:
         f"candidates={len(items)}",
         f"require_approval={cfg.require_approval}",
         f"max_sends_per_day={cfg.max_sends_per_day}",
+        f"force={force}",
     ]
 
     if not items:
@@ -72,7 +73,10 @@ def run(*, dry_run: bool = False) -> StageResult:
     ok_hours, reason = within_business_hours(settings)
     already = sends_today(settings)
     details.append(f"sends_today={already}")
-    details.append(f"business_hours={'yes' if ok_hours else 'no:' + reason}")
+    if force:
+        details.append("business_hours=bypassed (--force)")
+    else:
+        details.append(f"business_hours={'yes' if ok_hours else 'no:' + reason}")
 
     if dry_run:
         for it in items[:10]:
@@ -83,12 +87,12 @@ def run(*, dry_run: bool = False) -> StageResult:
         details.append("dry-run: no Gmail calls, no DB writes")
         return StageResult(stage="send", dry_run=True, processed=len(items), details=details)
 
-    if not ok_hours:
+    if not ok_hours and not force:
         return StageResult(
             stage="send",
             dry_run=False,
             skipped=len(items),
-            details=details + [f"blocked: {reason}"],
+            details=details + [f"blocked: {reason} (use --force to override for testing)"],
         )
 
     purged = purge_expired_cooldowns(settings)
@@ -116,26 +120,17 @@ def run(*, dry_run: bool = False) -> StageResult:
             log.info("send_throttle_sleep", seconds=round(delay, 1))
             time.sleep(delay)
             ok_hours, reason = within_business_hours(settings)
-            if not ok_hours:
+            if not ok_hours and not force:
                 skipped += len(items) - idx
                 details.append(f"stopped: {reason}")
                 break
 
         try:
-            # Reserve cooldown row first (DB-level uniqueness)
-            try:
-                with session_scope() as session:
-                    session.add(
-                        RecipientCooldown(
-                            email_normalized=email,
-                            draft_id=it["id"],
-                            sent_at=utcnow(),
-                        )
-                    )
-                    session.flush()
-            except IntegrityError:
+            # Send first; write cooldown only after success so killed OAuth
+            # attempts do not permanently block the address.
+            if cooldown_blocks(email):
                 skipped += 1
-                details.append(f"draft={it['id']} skipped unique cooldown {email}")
+                details.append(f"draft={it['id']} skipped cooldown {email}")
                 continue
 
             message_id = send_email(
@@ -146,6 +141,21 @@ def run(*, dry_run: bool = False) -> StageResult:
             )
 
             with session_scope() as session:
+                try:
+                    session.add(
+                        RecipientCooldown(
+                            email_normalized=email,
+                            draft_id=it["id"],
+                            sent_at=utcnow(),
+                        )
+                    )
+                    session.flush()
+                except IntegrityError as exc:
+                    # Another send won the race — still log ours but mark skipped-ish
+                    raise RuntimeError(
+                        f"cooldown unique conflict for {email} after send"
+                    ) from exc
+
                 draft = session.get(EmailDraft, it["id"])
                 post = session.get(Post, it["post_id"])
                 session.add(
@@ -172,13 +182,7 @@ def run(*, dry_run: bool = False) -> StageResult:
         except Exception as exc:
             failed += 1
             log.exception("send_failed", draft_id=it["id"], error=str(exc))
-            # Roll back cooldown reservation on failure so retries are possible
             with session_scope() as session:
-                row = session.exec(
-                    select(RecipientCooldown).where(RecipientCooldown.email_normalized == email)
-                ).first()
-                if row and row.draft_id == it["id"]:
-                    session.delete(row)
                 draft = session.get(EmailDraft, it["id"])
                 if draft:
                     draft.updated_at = utcnow()

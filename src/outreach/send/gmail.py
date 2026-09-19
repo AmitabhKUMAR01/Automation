@@ -47,6 +47,13 @@ def get_gmail_credentials(settings: Settings) -> Credentials:
     return creds
 
 
+def _content_type_for(path: Path) -> tuple[str, str]:
+    guessed, _ = mimetypes.guess_type(str(path))
+    content_type = guessed if guessed and "/" in guessed else "application/octet-stream"
+    maintype, subtype = content_type.split("/", 1)
+    return maintype, subtype
+
+
 def build_message(
     *,
     sender: str,
@@ -62,13 +69,9 @@ def build_message(
     msg.set_content(body)
 
     if attachment_path is not None and attachment_path.exists():
-        ctype, encoding = mimetypes.guess_type(str(attachment_path))
-        if mime is None:
-            mime = "application/octet-stream"
-        maintype, subtype = mime.split("/", 1)
-        raw = attachment_path.read_bytes()
+        maintype, subtype = _content_type_for(attachment_path)
         msg.add_attachment(
-            raw,
+            attachment_path.read_bytes(),
             maintype=maintype,
             subtype=subtype,
             filename=attachment_path.name,
@@ -90,11 +93,9 @@ def send_email(
         raise RuntimeError("GMAIL_SENDER is required in .env")
 
     attachment = settings.resolve_path(settings.config.send.resume_attachment_path)
-    if not attachment.exists():
+    attachment_path = attachment if attachment.exists() else None
+    if attachment_path is None:
         log.warning("resume_attachment_missing", path=str(attachment))
-        attachment_path = None
-    else:
-        attachment_path = attachment
 
     creds = get_gmail_credentials(settings)
     service = build("gmail", "v1", credentials=creds, cache_discovery=False)

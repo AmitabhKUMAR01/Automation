@@ -210,7 +210,7 @@ def cmd_linkedin_login(
     config: Optional[str] = typer.Option(None, "--config"),
     timeout: int = typer.Option(300, "--timeout", help="Seconds to wait for manual login"),
 ) -> None:
-    """Open a browser, log into LinkedIn once, save session for feed ingest."""
+    """Open a browser, log into LinkedIn once, save session for feed/DM ingest."""
     _common_options(False, verbose, config)
     from outreach.ingest.sources.linkedin_feed import ensure_logged_in_session
 
@@ -218,7 +218,8 @@ def cmd_linkedin_login(
     path = ensure_logged_in_session(settings, timeout_seconds=timeout)
     console.print(f"Saved LinkedIn session to {path}", markup=False)
     console.print(
-        "Set ingest.source: linkedin_feed in config.yaml, then: uv run pipeline ingest",
+        "Then set ingest.source to linkedin_feed or linkedin_dms in config.yaml "
+        "and run: uv run pipeline ingest",
         markup=False,
     )
 

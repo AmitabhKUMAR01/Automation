@@ -83,8 +83,8 @@ def _is_feed_authenticated(page: Page) -> bool:
     url = page.url.lower()
     if any(x in url for x in ("/login", "/checkpoint", "/authwall", "/uas/")):
         return False
-    # Signed-in home feed (including /feed/foryou/)
-    if "/feed" in url:
+    # Signed-in surfaces: Home feed or Messaging (incl. /messaging/thread/...)
+    if "/feed" in url or "/messaging" in url:
         return True
     # Some challenges keep linkedin.com but show login chrome
     try:

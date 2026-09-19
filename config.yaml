@@ -2,7 +2,9 @@
 # Secrets stay in .env — never put API keys here.
 
 ingest:
-  source: linkedin_feed  # linkedin_feed | apify | csv
+  # linkedin_feed | linkedin_dms | apify | csv
+  # Switch to linkedin_feed for Home feed; linkedin_dms for Messaging
+  source: linkedin_dms
   lookback_days: 30
   search_terms:
     - "hiring"
@@ -23,6 +25,16 @@ ingest:
   feed_scroll_pause_min: 2.0
   feed_scroll_pause_max: 4.5
   feed_navigation_timeout_ms: 60000
+  # Messaging watchlist (used when source: linkedin_dms)
+  # Opening a chat is read-only — never treated as "applied"
+  dm:
+    bookmark_contacts:
+      - "Abhishek Kumar"
+    inbound_contacts: []  # optional friend names; empty + scan_recent = hiring-looking threads
+    max_conversations: 15
+    max_messages_per_thread: 40
+    lookback_days: 30
+    scan_recent_if_no_inbound: true
 
 parse:
   llm_retries: 1

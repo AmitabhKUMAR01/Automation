@@ -73,6 +73,16 @@ def run(*, dry_run: bool = False) -> StageResult:
         details.append(f"max_scrolls={cfg.feed_max_scrolls}")
         details.append(f"storage={cfg.linkedin_storage_state}")
         details.append(f"headless={cfg.linkedin_headless}")
+    elif source.name == "linkedin_dms":
+        cfg = settings.config.ingest
+        dm = cfg.dm
+        details.append(f"max_posts={cfg.max_posts_per_run}")
+        details.append(f"bookmark={dm.bookmark_contacts}")
+        details.append(f"inbound={dm.inbound_contacts or 'recent_hiring_previews'}")
+        details.append(f"max_conversations={dm.max_conversations}")
+        details.append(f"storage={cfg.linkedin_storage_state}")
+        details.append(f"headless={cfg.linkedin_headless}")
+        details.append("note=opening_chat_does_not_mean_applied")
 
     if dry_run:
         details.append("dry-run: no external fetch, no DB writes")

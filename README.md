@@ -5,7 +5,7 @@ score against your resume → draft personalized emails → human review → sen
 
 ## Stages
 
-1. `ingest` — LinkedIn personal feed (Playwright) and/or Apify search (pluggable `Source`)
+1. `ingest` — LinkedIn feed, LinkedIn DMs (bookmarks/inbound), and/or Apify (pluggable `Source`)
 2. `parse` — regex emails + LLM structured fields
 3. `enrich` — optional Hunter/Apollo lookup (`enrich.enabled`)
 4. `match` — resume score 0–100
@@ -38,7 +38,32 @@ If LinkedIn asks you to log in again: re-run `linkedin-login`.
 
 **Risk:** automating LinkedIn can restrict accounts — keep `max_posts_per_run` low and don't run 24/7.
 
-To switch back to Apify keyword search: set `ingest.source: apify`.
+### LinkedIn Messaging (DM bookmarks + inbound)
+
+Use Messaging as a second source: openings friends send you, or jobs you forward to a bookmark contact (default: **Abhishek Kumar**).
+
+Opening a chat during scrape is **read-only** — it never marks a post as applied. Only approve → Gmail send does.
+
+In `config.yaml`:
+
+```yaml
+ingest:
+  source: linkedin_dms
+  dm:
+    bookmark_contacts:
+      - "Abhishek Kumar"
+    inbound_contacts: []          # optional friend names
+    scan_recent_if_no_inbound: true
+```
+
+```powershell
+uv run pipeline linkedin-login    # if session expired
+uv run pipeline ingest            # opens Messaging, scrapes watchlist threads
+```
+
+Switch back to the feed with `ingest.source: linkedin_feed`. Multi-source in one run is not built yet — run twice with different `source` values.
+
+To switch to Apify keyword search: set `ingest.source: apify`.
 
 ## Setup
 

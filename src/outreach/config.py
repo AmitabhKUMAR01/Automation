@@ -19,6 +19,23 @@ class BusinessHours(BaseModel):
     end: str = "18:00"
 
 
+class DmIngestConfig(BaseModel):
+    """LinkedIn Messaging watchlist — bookmark + inbound job DMs (read-only)."""
+
+    bookmark_contacts: list[str] = Field(
+        default_factory=lambda: ["Abhishek Kumar"],
+        description="Chats you use as a job bookmark (e.g. forward openings here)",
+    )
+    inbound_contacts: list[str] = Field(
+        default_factory=list,
+        description="Friend names to always scan; empty = also scan recent hiring-looking threads",
+    )
+    max_conversations: int = 15
+    max_messages_per_thread: int = 40
+    lookback_days: int = 30
+    scan_recent_if_no_inbound: bool = True
+
+
 class IngestConfig(BaseModel):
     source: str = "apify"
     lookback_days: int = 7
@@ -33,6 +50,8 @@ class IngestConfig(BaseModel):
     feed_scroll_pause_min: float = 2.0
     feed_scroll_pause_max: float = 4.5
     feed_navigation_timeout_ms: int = 60000
+    # LinkedIn Messaging (Playwright) — opening a chat never marks applied
+    dm: DmIngestConfig = Field(default_factory=DmIngestConfig)
 
 
 class ParseConfig(BaseModel):

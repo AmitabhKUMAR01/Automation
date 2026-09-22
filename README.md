@@ -67,11 +67,30 @@ uv run pipeline ingest            # opens Messaging, scrapes watchlist threads
 uv run pipeline ingest -s feed     # Home feed
 uv run pipeline ingest -s dms      # Messaging bookmarks / inbound
 uv run pipeline ingest -s posts    # Apify LinkedIn posts search
-uv run pipeline ingest -s all      # all three, one after another
+uv run pipeline ingest -s naukri   # Naukri job discovery (no auto-apply)
+uv run pipeline ingest -s all      # feed + dms + posts (not Naukri)
 ```
 
-Aliases: `feed`, `dms`/`dm`, `posts`/`apify`, `all`.  
+Aliases: `feed`, `dms`/`dm`, `posts`/`apify`, `naukri`, `all`.  
 `config.yaml` `ingest.source` is only the default when you omit `-s`.
+
+### Naukri discovery + shortlist (manual apply)
+
+**Discover only** — never clicks Apply on Naukri.
+
+```powershell
+# optional if you hit a login wall
+uv run pipeline naukri-login
+
+uv run pipeline ingest -s naukri
+uv run pipeline parse
+uv run pipeline match
+uv run pipeline shortlist          # writes data/naukri_shortlist.md
+# or include LinkedIn matches too:
+uv run pipeline shortlist -s all
+```
+
+Open `data/naukri_shortlist.md` and apply yourself on Naukri via the links.
 
 ## Setup
 

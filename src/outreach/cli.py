@@ -67,10 +67,10 @@ def cmd_ingest(
         None,
         "--source",
         "-s",
-        help="Ingest source: feed | dms | posts | all (overrides config.yaml)",
+        help="Ingest source: feed | dms | posts | naukri | all (overrides config.yaml)",
     ),
 ) -> None:
-    """Pull raw hiring posts (feed, DMs, or Apify posts search)."""
+    """Pull raw hiring posts (feed, DMs, Apify, or Naukri discovery)."""
     _common_options(dry_run, verbose, config)
     _print_result(ingest.run(dry_run=dry_run, source=source))
 
@@ -87,7 +87,7 @@ def run_all(
         None,
         "--source",
         "-s",
-        help="Ingest source for this run: feed | dms | posts | all",
+        help="Ingest source for this run: feed | dms | posts | naukri | all",
     ),
 ) -> None:
     """Run all stages in order: ingest -> parse -> enrich -> match -> compose -> send."""
@@ -230,10 +230,62 @@ def cmd_linkedin_login(
     path = ensure_logged_in_session(settings, timeout_seconds=timeout)
     console.print(f"Saved LinkedIn session to {path}", markup=False)
     console.print(
-        "Then set ingest.source to linkedin_feed or linkedin_dms in config.yaml "
-        "and run: uv run pipeline ingest",
+        "Then: uv run pipeline ingest -s feed   (or -s dms)",
         markup=False,
     )
+
+
+@app.command("naukri-login")
+def cmd_naukri_login(
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    config: Optional[str] = typer.Option(None, "--config"),
+    timeout: int = typer.Option(300, "--timeout", help="Seconds to wait for manual login"),
+) -> None:
+    """Optional Naukri login — saves session for job discovery (never auto-applies)."""
+    _common_options(False, verbose, config)
+    from outreach.ingest.sources.naukri import ensure_naukri_session
+
+    settings = get_settings()
+    path = ensure_naukri_session(settings, timeout_seconds=timeout)
+    console.print(f"Saved Naukri session to {path}", markup=False)
+    console.print(
+        "Then: uv run pipeline ingest -s naukri",
+        markup=False,
+    )
+
+
+@app.command("shortlist")
+def cmd_shortlist(
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    config: Optional[str] = typer.Option(None, "--config"),
+    source: Optional[str] = typer.Option(
+        "naukri",
+        "--source",
+        "-s",
+        help="Filter by source (default naukri). Use 'all' for every source.",
+    ),
+    min_score: Optional[int] = typer.Option(
+        None, "--min-score", help="Override match cutoff for the shortlist"
+    ),
+    limit: int = typer.Option(50, "--limit", help="Max jobs in the shortlist file"),
+) -> None:
+    """Write a markdown alert list of matching jobs for MANUAL apply."""
+    from outreach import shortlist as shortlist_mod
+
+    _common_options(dry_run, verbose, config)
+    src = None if source and source.lower().strip() == "all" else source
+    result = shortlist_mod.run(
+        source=src,
+        min_score=min_score,
+        limit=limit,
+        dry_run=dry_run,
+    )
+    _print_result(result)
+    if not dry_run and result.details:
+        for d in result.details:
+            if d.startswith("path="):
+                console.print(f"Open {d.removeprefix('path=')}", markup=False)
 
 
 @app.command("init-db")

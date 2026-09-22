@@ -82,6 +82,13 @@ def _source_details(source: Source) -> list[str]:
         details.append(f"storage={cfg.linkedin_storage_state}")
         details.append(f"headless={cfg.linkedin_headless}")
         details.append("note=opening_chat_does_not_mean_applied")
+    elif source.name == "naukri":
+        nk = settings.config.ingest.naukri
+        details.append(f"keywords={nk.keywords}")
+        details.append(f"locations={nk.locations}")
+        details.append(f"max_jobs={nk.max_jobs_per_run}")
+        details.append(f"headless={nk.headless}")
+        details.append("note=discovery_only_never_auto_apply")
     return details
 
 

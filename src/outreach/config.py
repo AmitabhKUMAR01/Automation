@@ -36,6 +36,30 @@ class DmIngestConfig(BaseModel):
     scan_recent_if_no_inbound: bool = True
 
 
+class NaukriIngestConfig(BaseModel):
+    """Naukri job discovery only — never auto-applies."""
+
+    storage_state: str = "credentials/naukri_storage_state.json"
+    headless: bool = False
+    locations: list[str] = Field(
+        default_factory=lambda: ["delhi-ncr", "remote"],
+    )
+    keywords: list[str] = Field(
+        default_factory=lambda: [
+            "full stack developer",
+            "react developer",
+            "node.js developer",
+        ],
+    )
+    experience_years: str = "2"  # passed into search UX when possible
+    max_pages_per_query: int = 2
+    max_jobs_per_run: int = 40
+    scroll_pause_min: float = 2.0
+    scroll_pause_max: float = 4.0
+    shortlist_path: str = "data/naukri_shortlist.md"
+    profile_summary_path: str = "Naukri.com.txt"
+
+
 class IngestConfig(BaseModel):
     source: str = "apify"
     lookback_days: int = 7
@@ -52,6 +76,8 @@ class IngestConfig(BaseModel):
     feed_navigation_timeout_ms: int = 60000
     # LinkedIn Messaging (Playwright) — opening a chat never marks applied
     dm: DmIngestConfig = Field(default_factory=DmIngestConfig)
+    # Naukri discovery (Playwright) — shortlist only, never auto-apply
+    naukri: NaukriIngestConfig = Field(default_factory=NaukriIngestConfig)
 
 
 class ParseConfig(BaseModel):

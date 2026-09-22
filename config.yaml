@@ -3,8 +3,8 @@
 
 ingest:
   # Default source when you omit --source on the CLI.
-  # Prefer switching via: uv run pipeline ingest -s feed|dms|posts|all
-  # linkedin_feed | linkedin_dms | apify | csv
+  # Prefer switching via: uv run pipeline ingest -s feed|dms|posts|naukri|all
+  # linkedin_feed | linkedin_dms | apify | csv | naukri
   source: linkedin_feed
   lookback_days: 30
   search_terms:
@@ -36,6 +36,22 @@ ingest:
     max_messages_per_thread: 40
     lookback_days: 30
     scan_recent_if_no_inbound: true
+  # Naukri discovery only — NEVER auto-applies. Use shortlist for manual Apply links.
+  naukri:
+    storage_state: credentials/naukri_storage_state.json
+    headless: false
+    locations:
+      - delhi-ncr
+      - remote
+    keywords:
+      - full stack developer
+      - react developer
+      - node.js developer
+    experience_years: "2"
+    max_pages_per_query: 2
+    max_jobs_per_run: 40
+    shortlist_path: data/naukri_shortlist.md
+    profile_summary_path: Naukri.com.txt
 
 parse:
   llm_retries: 1

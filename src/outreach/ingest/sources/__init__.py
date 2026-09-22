@@ -19,9 +19,11 @@ SOURCE_ALIASES: dict[str, str] = {
     "apify": "apify",
     "search": "apify",
     "csv": "csv",
+    "naukri": "naukri",
+    "naukridotcom": "naukri",
 }
 
-# Default order when ingesting everything in one go
+# Default order when ingesting everything in one go (LinkedIn + Apify; Naukri is opt-in)
 ALL_SOURCES: tuple[str, ...] = ("linkedin_feed", "linkedin_dms", "apify")
 
 
@@ -30,7 +32,7 @@ def normalize_source(name: str) -> str:
     if key in {"all", "*"}:
         return "all"
     if key not in SOURCE_ALIASES:
-        allowed = "feed|dms|posts|apify|csv|linkedin_feed|linkedin_dms|all"
+        allowed = "feed|dms|posts|apify|csv|naukri|linkedin_feed|linkedin_dms|all"
         raise ValueError(f"Unknown ingest source: {name!r} (expected {allowed})")
     return SOURCE_ALIASES[key]
 
@@ -56,5 +58,9 @@ def get_source(settings: Settings, source_name: str | None = None) -> Source:
         from outreach.ingest.sources.linkedin_dms import LinkedInDmsSource
 
         return LinkedInDmsSource(settings)
+    if name == "naukri":
+        from outreach.ingest.sources.naukri import NaukriSource
+
+        return NaukriSource(settings)
 
     raise ValueError(f"Unhandled ingest source: {name!r}")

@@ -61,9 +61,17 @@ uv run pipeline linkedin-login    # if session expired
 uv run pipeline ingest            # opens Messaging, scrapes watchlist threads
 ```
 
-Switch back to the feed with `ingest.source: linkedin_feed`. Multi-source in one run is not built yet — run twice with different `source` values.
+### Switch sources without editing config
 
-To switch to Apify keyword search: set `ingest.source: apify`.
+```powershell
+uv run pipeline ingest -s feed     # Home feed
+uv run pipeline ingest -s dms      # Messaging bookmarks / inbound
+uv run pipeline ingest -s posts    # Apify LinkedIn posts search
+uv run pipeline ingest -s all      # all three, one after another
+```
+
+Aliases: `feed`, `dms`/`dm`, `posts`/`apify`, `all`.  
+`config.yaml` `ingest.source` is only the default when you omit `-s`.
 
 ## Setup
 

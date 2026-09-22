@@ -7,9 +7,9 @@ from sqlmodel import select
 from outreach.config import get_settings
 from outreach.db.models import Post, PostStatus, utcnow
 from outreach.db.session import session_scope
-from outreach.ingest.sources import get_source
+from outreach.ingest.sources import ALL_SOURCES, get_source, normalize_source
 from outreach.logging import get_logger
-from outreach.protocols import RawPost
+from outreach.protocols import RawPost, Source
 from outreach.stages import StageResult
 
 log = get_logger("ingest")
@@ -51,9 +51,8 @@ def persist_new_posts(raw_posts: list[RawPost]) -> tuple[int, int]:
     return inserted, skipped
 
 
-def run(*, dry_run: bool = False) -> StageResult:
+def _source_details(source: Source) -> list[str]:
     settings = get_settings()
-    source = get_source(settings)
     details: list[str] = [f"source={source.name}"]
 
     if source.name == "apify":
@@ -83,6 +82,13 @@ def run(*, dry_run: bool = False) -> StageResult:
         details.append(f"storage={cfg.linkedin_storage_state}")
         details.append(f"headless={cfg.linkedin_headless}")
         details.append("note=opening_chat_does_not_mean_applied")
+    return details
+
+
+def _run_one(*, dry_run: bool, source_name: str | None) -> StageResult:
+    settings = get_settings()
+    source = get_source(settings, source_name)
+    details = _source_details(source)
 
     if dry_run:
         details.append("dry-run: no external fetch, no DB writes")
@@ -91,7 +97,7 @@ def run(*, dry_run: bool = False) -> StageResult:
     try:
         raw_posts = source.fetch()
     except Exception as exc:
-        log.exception("ingest_failed", error=str(exc))
+        log.exception("ingest_failed", error=str(exc), source=source.name)
         return StageResult(
             stage="ingest",
             dry_run=False,
@@ -101,7 +107,13 @@ def run(*, dry_run: bool = False) -> StageResult:
 
     inserted, skipped = persist_new_posts(raw_posts)
     details.append(f"fetched={len(raw_posts)} inserted={inserted} deduped={skipped}")
-    log.info("ingest_done", fetched=len(raw_posts), inserted=inserted, skipped=skipped)
+    log.info(
+        "ingest_done",
+        source=source.name,
+        fetched=len(raw_posts),
+        inserted=inserted,
+        skipped=skipped,
+    )
     return StageResult(
         stage="ingest",
         dry_run=False,
@@ -110,3 +122,33 @@ def run(*, dry_run: bool = False) -> StageResult:
         skipped=skipped,
         details=details,
     )
+
+
+def run(*, dry_run: bool = False, source: str | None = None) -> StageResult:
+    """
+    Run ingest for one source, or all three (feed + dms + posts/apify).
+
+    ``source`` overrides ``config.yaml`` ingest.source when set.
+    Aliases: feed, dms, posts|apify, all
+    """
+    chosen = normalize_source(source) if source else normalize_source(
+        get_settings().config.ingest.source
+    )
+
+    if chosen != "all":
+        return _run_one(dry_run=dry_run, source_name=chosen)
+
+    results = [_run_one(dry_run=dry_run, source_name=name) for name in ALL_SOURCES]
+    merged = StageResult(
+        stage="ingest",
+        dry_run=dry_run,
+        processed=sum(r.processed for r in results),
+        succeeded=sum(r.succeeded for r in results),
+        skipped=sum(r.skipped for r in results),
+        failed=sum(r.failed for r in results),
+        details=[f"mode=all sources={list(ALL_SOURCES)}"],
+    )
+    for r in results:
+        merged.details.append(f"--- {r.details[0] if r.details else 'source=?'} ---")
+        merged.details.extend(f"  {d}" for d in r.details[1:])
+    return merged

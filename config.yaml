@@ -2,9 +2,10 @@
 # Secrets stay in .env — never put API keys here.
 
 ingest:
+  # Default source when you omit --source on the CLI.
+  # Prefer switching via: uv run pipeline ingest -s feed|dms|posts|all
   # linkedin_feed | linkedin_dms | apify | csv
-  # Switch to linkedin_feed for Home feed; linkedin_dms for Messaging
-  source: linkedin_dms
+  source: linkedin_feed
   lookback_days: 30
   search_terms:
     - "hiring"
@@ -52,7 +53,7 @@ enrich:
 
 match:
   resume_path: resume/10_Sep_Amitabh_Kumar_Full_Stack_Resume.pdf
-  score_cutoff: 10  # 0-100; posts below this are skipped
+  score_cutoff: 60  # 0-100; posts below this are skipped
 
 compose:
   max_words: 150

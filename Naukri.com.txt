@@ -1,0 +1,3 @@
+// Summary 
+
+Full Stack Developer with 2 years of experience building web applications using React.js, Next.js, Node.js, and NestJS. Skilled in TypeScript, PostgreSQL, MongoDB, Redis, and Docker, with experience building Meta Ads monitoring and real-time collaboration products. Seeking Full Stack, React.js, or Node.js Developer roles in Delhi NCR or remote; available within 15 days.

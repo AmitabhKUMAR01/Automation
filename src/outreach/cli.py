@@ -58,6 +58,23 @@ def main(
     _ = (verbose, config)
 
 
+@app.command("ingest")
+def cmd_ingest(
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    config: Optional[str] = typer.Option(None, "--config"),
+    source: Optional[str] = typer.Option(
+        None,
+        "--source",
+        "-s",
+        help="Ingest source: feed | dms | posts | all (overrides config.yaml)",
+    ),
+) -> None:
+    """Pull raw hiring posts (feed, DMs, or Apify posts search)."""
+    _common_options(dry_run, verbose, config)
+    _print_result(ingest.run(dry_run=dry_run, source=source))
+
+
 @app.command("run")
 def run_all(
     dry_run: bool = typer.Option(False, "--dry-run", help="No API calls or sends"),
@@ -66,13 +83,19 @@ def run_all(
     skip_enrich: bool = typer.Option(
         False, "--skip-enrich", help="Skip enrich even if enabled in config"
     ),
+    source: Optional[str] = typer.Option(
+        None,
+        "--source",
+        "-s",
+        help="Ingest source for this run: feed | dms | posts | all",
+    ),
 ) -> None:
     """Run all stages in order: ingest -> parse -> enrich -> match -> compose -> send."""
     _common_options(dry_run, verbose, config)
     settings = get_settings()
 
     runners = {
-        "ingest": lambda: ingest.run(dry_run=dry_run),
+        "ingest": lambda: ingest.run(dry_run=dry_run, source=source),
         "parse": lambda: parse.run(dry_run=dry_run),
         "enrich": lambda: enrich.run(dry_run=dry_run),
         "match": lambda: match.run(dry_run=dry_run),
@@ -92,17 +115,6 @@ def run_all(
             )
             continue
         _print_result(runners[name]())
-
-
-@app.command("ingest")
-def cmd_ingest(
-    dry_run: bool = typer.Option(False, "--dry-run"),
-    verbose: bool = typer.Option(False, "--verbose", "-v"),
-    config: Optional[str] = typer.Option(None, "--config"),
-) -> None:
-    """Pull raw hiring posts."""
-    _common_options(dry_run, verbose, config)
-    _print_result(ingest.run(dry_run=dry_run))
 
 
 @app.command("parse")

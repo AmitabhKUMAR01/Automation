@@ -71,6 +71,9 @@ class IngestConfig(BaseModel):
     linkedin_storage_state: str = "credentials/linkedin_storage_state.json"
     linkedin_headless: bool = False  # visible browser is safer for LinkedIn challenges
     feed_max_scrolls: int = 12
+    # Keep scrolling (up to feed_max_scrolls_hard) until this many posts contain an email
+    feed_min_with_email: int = 5
+    feed_max_scrolls_hard: int = 40
     feed_scroll_pause_min: float = 2.0
     feed_scroll_pause_max: float = 4.5
     feed_navigation_timeout_ms: int = 60000

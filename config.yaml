@@ -23,6 +23,10 @@ ingest:
   linkedin_storage_state: credentials/linkedin_storage_state.json
   linkedin_headless: false
   feed_max_scrolls: 12
+  # Keep scrolling until at least N role-fit posts contain a sendable email
+  # (or feed_max_scrolls_hard is hit — whichever comes first)
+  feed_min_with_email: 5
+  feed_max_scrolls_hard: 40
   feed_scroll_pause_min: 2.0
   feed_scroll_pause_max: 4.5
   feed_navigation_timeout_ms: 60000

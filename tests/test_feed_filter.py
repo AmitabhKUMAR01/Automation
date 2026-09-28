@@ -12,9 +12,20 @@ from outreach.ingest.sources.linkedin_dms import (
 )
 
 
-def test_looks_like_hiring_with_hash() -> None:
+def test_looks_like_hiring_with_role() -> None:
     text = "We are expanding the team! #hiring React developers in Bangalore. DM me."
-    assert looks_like_hiring_post(text, build_feed_needles([], ["react developer"]))
+    needles = build_feed_needles([], ["react developer"])
+    assert looks_like_hiring_post(text, needles)
+
+
+def test_rejects_hiring_wrong_role() -> None:
+    """Feed must not keep Customer Support just because it says hiring."""
+    text = (
+        "We are hiring Customer Support Executives for our call center. "
+        "Apply now if you have excellent communication skills."
+    )
+    needles = build_feed_needles(["hiring"], ["full stack", "react developer", "node.js"])
+    assert not looks_like_hiring_post(text, needles, require_role=True)
 
 
 def test_rejects_non_hiring_short() -> None:
@@ -30,12 +41,16 @@ def test_role_needle_match() -> None:
     assert looks_like_hiring_post(text, needles)
 
 
-def test_job_url_counts_as_hiring() -> None:
+def test_job_url_with_role() -> None:
     assert has_job_url("see https://www.linkedin.com/jobs/view/12345/")
-    assert looks_like_hiring_post(
-        "Check this https://boards.greenhouse.io/acme/jobs/99",
-        [],
-    )
+    text = "Full stack role open https://boards.greenhouse.io/acme/jobs/99"
+    assert looks_like_hiring_post(text, build_feed_needles([], ["full stack"]))
+
+
+def test_dm_loose_mode_accepts_hiring_without_role() -> None:
+    text = "Hey check this opening we are hiring for our team — apply here please thanks"
+    needles = build_feed_needles(["hiring"], ["full stack"])
+    assert looks_like_hiring_post(text, needles, require_role=False)
 
 
 def test_name_matches_partial() -> None:
@@ -92,4 +107,3 @@ def test_message_to_raw_post_keeps_dm_metadata() -> None:
     assert post.extra["dm_kind"] == "bookmark"
     assert "does not mean applied" in post.raw_text
     assert "linkedin.com/jobs/view/999" in post.url
-

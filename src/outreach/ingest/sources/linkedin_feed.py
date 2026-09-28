@@ -16,6 +16,7 @@ from playwright.sync_api import Browser, Page, sync_playwright
 from outreach.config import Settings
 from outreach.ingest.sources.feed_filter import build_feed_needles, looks_like_hiring_post
 from outreach.logging import get_logger
+from outreach.parse.emails import extract_emails
 from outreach.protocols import RawPost
 
 log = get_logger("ingest.linkedin_feed")
@@ -339,9 +340,14 @@ class LinkedInFeedSource:
 
         needles = build_feed_needles(cfg.search_terms, cfg.target_roles)
         max_posts = cfg.max_posts_per_run
-        max_scrolls = cfg.feed_max_scrolls
+        soft_scrolls = max(1, cfg.feed_max_scrolls)
+        hard_scrolls = max(soft_scrolls, cfg.feed_max_scrolls_hard)
+        min_with_email = max(0, cfg.feed_min_with_email)
 
         collected: dict[str, RawPost] = {}
+
+        def _email_count() -> int:
+            return sum(1 for p in collected.values() if extract_emails(p.raw_text))
 
         with sync_playwright() as p:
             browser = _launch_browser(p, headless=cfg.linkedin_headless)
@@ -353,7 +359,12 @@ class LinkedInFeedSource:
             )
             page = context.new_page()
             page.set_default_timeout(cfg.feed_navigation_timeout_ms)
-            log.info("linkedin_feed_open", headless=cfg.linkedin_headless)
+            log.info(
+                "linkedin_feed_open",
+                headless=cfg.linkedin_headless,
+                min_with_email=min_with_email,
+                hard_scrolls=hard_scrolls,
+            )
             page.goto(FEED_URL, wait_until="domcontentloaded")
             page.wait_for_timeout(2500)
             _dismiss_overlays(page)
@@ -382,7 +393,7 @@ class LinkedInFeedSource:
                     hint="Open data/debug/linkedin_feed_last.png to see what LinkedIn showed",
                 )
 
-            for scroll_i in range(max_scrolls):
+            for scroll_i in range(hard_scrolls):
                 _expand_see_more(page)
                 raw_cards = _extract_posts_from_page(page)
                 for card in raw_cards:
@@ -394,6 +405,7 @@ class LinkedInFeedSource:
                     )
                     if url in collected:
                         continue
+                    emails = extract_emails(text)
                     collected[url] = RawPost(
                         url=url,
                         raw_text=text[:8000],
@@ -401,23 +413,56 @@ class LinkedInFeedSource:
                         author_profile_url=(card.get("authorUrl") or None),
                         posted_at=datetime.now(timezone.utc),
                         source="linkedin_feed",
-                        extra={"urn": card.get("urn")},
+                        extra={
+                            "urn": card.get("urn"),
+                            "emails_found": emails,
+                        },
                     )
-                    if len(collected) >= max_posts:
+                    if len(collected) >= max_posts and _email_count() >= min_with_email:
                         break
 
+                with_email = _email_count()
                 log.info(
                     "linkedin_feed_scroll",
                     scroll=scroll_i + 1,
                     cards=len(raw_cards),
                     hiring_kept=len(collected),
+                    with_email=with_email,
+                    min_with_email=min_with_email,
                 )
-                if len(collected) >= max_posts:
+
+                # Soft stop: enough email posts (or filled max_posts and email goal met)
+                if with_email >= min_with_email:
+                    log.info(
+                        "linkedin_feed_email_goal_met",
+                        with_email=with_email,
+                        scrolls=scroll_i + 1,
+                    )
                     break
+                if len(collected) >= max_posts and with_email >= min_with_email:
+                    break
+                # Past soft scroll budget but still short on emails → keep going to hard cap
+                if scroll_i + 1 >= soft_scrolls and with_email < min_with_email:
+                    log.info(
+                        "linkedin_feed_extend_scroll",
+                        reason="need_more_emails",
+                        with_email=with_email,
+                        min_with_email=min_with_email,
+                    )
 
                 _scroll_feed(page, random.randint(1600, 2600))
                 pause = random.uniform(cfg.feed_scroll_pause_min, cfg.feed_scroll_pause_max)
                 page.wait_for_timeout(int(pause * 1000))
+
+            with_email = _email_count()
+            if min_with_email and with_email < min_with_email:
+                log.warning(
+                    "linkedin_feed_email_goal_missed",
+                    with_email=with_email,
+                    min_with_email=min_with_email,
+                    hiring_kept=len(collected),
+                    hint="Feed may not have enough role+email posts right now",
+                )
 
             if not collected:
                 _dump_debug(page, self.settings)
@@ -430,13 +475,23 @@ class LinkedInFeedSource:
 
             if not cfg.linkedin_headless:
                 print(
-                    f"\nFeed scrape finished (kept {len(collected)} hiring posts). "
+                    f"\nFeed scrape finished "
+                    f"(kept {len(collected)} hiring posts, {with_email} with email). "
                     "Closing browser in 3s...\n"
                 )
                 page.wait_for_timeout(3000)
 
             browser.close()
 
-        posts = list(collected.values())[:max_posts]
-        log.info("linkedin_feed_done", kept=len(posts))
+        # Prefer email-bearing posts first when returning (still capped)
+        ordered = sorted(
+            collected.values(),
+            key=lambda p: (0 if extract_emails(p.raw_text) else 1, p.url),
+        )
+        posts = ordered[:max_posts]
+        log.info(
+            "linkedin_feed_done",
+            kept=len(posts),
+            with_email=sum(1 for p in posts if extract_emails(p.raw_text)),
+        )
         return posts

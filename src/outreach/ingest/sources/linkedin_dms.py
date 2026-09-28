@@ -288,7 +288,7 @@ def _classify_conversation(
         return None
     # No inbound whitelist: keep threads whose preview already looks job-related
     blob = f"{name}\n{preview}"
-    if looks_like_hiring_post(blob, needles) or has_job_url(blob):
+    if looks_like_hiring_post(blob, needles, require_role=False) or has_job_url(blob):
         return "inbound"
     if has_job_url(preview or ""):
         return "inbound"
@@ -307,7 +307,9 @@ def _message_to_raw_post(
         if link and link not in combined:
             combined = f"{combined}\n{link}"
     needles = build_feed_needles([], [])
-    if not looks_like_hiring_post(combined, needles) and not has_job_url(combined):
+    if not looks_like_hiring_post(combined, needles, require_role=False) and not has_job_url(
+        combined
+    ):
         return None
 
     job_url = _first_job_url(combined)

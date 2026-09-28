@@ -25,6 +25,23 @@ from outreach.stages import StageResult
 log = get_logger("send")
 
 
+def _mark_draft_cooldown_skipped(draft_id: int, post_id: int, email: str) -> None:
+    """Leave approved queue so the same cooldown drafts are not retried every run."""
+    with session_scope() as session:
+        draft = session.get(EmailDraft, draft_id)
+        post = session.get(Post, post_id)
+        if draft and draft.status == DraftStatus.approved:
+            draft.status = DraftStatus.rejected
+            draft.updated_at = utcnow()
+            session.add(draft)
+        if post and post.status in {PostStatus.approved, PostStatus.pending_review}:
+            post.status = PostStatus.skipped
+            post.last_error = f"send skipped: recipient cooldown for {email}"
+            post.updated_at = utcnow()
+            session.add(post)
+    log.info("send_cooldown_closed", draft_id=draft_id, to=email)
+
+
 def run(*, dry_run: bool = False, force: bool = False) -> StageResult:
     settings = get_settings()
     cfg = settings.config.send
@@ -112,6 +129,7 @@ def run(*, dry_run: bool = False, force: bool = False) -> StageResult:
         if cooldown_blocks(email):
             skipped += 1
             details.append(f"draft={it['id']} skipped cooldown {email}")
+            _mark_draft_cooldown_skipped(it["id"], it["post_id"], email)
             continue
 
         # Delay between sends (not before the first)
@@ -131,6 +149,7 @@ def run(*, dry_run: bool = False, force: bool = False) -> StageResult:
             if cooldown_blocks(email):
                 skipped += 1
                 details.append(f"draft={it['id']} skipped cooldown {email}")
+                _mark_draft_cooldown_skipped(it["id"], it["post_id"], email)
                 continue
 
             message_id = send_email(

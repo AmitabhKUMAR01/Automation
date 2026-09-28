@@ -70,6 +70,8 @@ def _source_details(source: Source) -> list[str]:
         cfg = settings.config.ingest
         details.append(f"max_posts={cfg.max_posts_per_run}")
         details.append(f"max_scrolls={cfg.feed_max_scrolls}")
+        details.append(f"min_with_email={cfg.feed_min_with_email}")
+        details.append(f"hard_scrolls={cfg.feed_max_scrolls_hard}")
         details.append(f"storage={cfg.linkedin_storage_state}")
         details.append(f"headless={cfg.linkedin_headless}")
     elif source.name == "linkedin_dms":

@@ -105,6 +105,9 @@ class EnrichConfig(BaseModel):
 class MatchConfig(BaseModel):
     resume_path: str = "resume/resume.pdf"
     score_cutoff: int = 60
+    # Posts whose minimum required years <= this are scored on role/stack fit only
+    # (no penalty for the years gap). Above it, experience counts as usual.
+    experience_flex_max_years: int = 4
 
 
 class ComposeConfig(BaseModel):

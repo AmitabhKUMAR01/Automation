@@ -108,6 +108,9 @@ enrich:
 match:
   resume_path: resume/27_Sep_Amitabh_Kumar_Full_Stack_Resume.pdf
   score_cutoff: 60  # 0-100; posts below this are skipped
+  # Apply to roles asking up to N years min (e.g. "1-4 yrs", "3+ years") without
+  # the matcher penalising the gap. Roles asking more are judged strictly.
+  experience_flex_max_years: 4
 
 compose:
   max_words: 150

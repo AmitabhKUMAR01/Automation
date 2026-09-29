@@ -144,10 +144,15 @@ def cmd_match(
     dry_run: bool = typer.Option(False, "--dry-run"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     config: Optional[str] = typer.Option(None, "--config"),
+    rescore_rejected: bool = typer.Option(
+        False,
+        "--rescore-rejected",
+        help="Also re-score earlier rejects whose min years <= match.experience_flex_max_years.",
+    ),
 ) -> None:
     """Score posts against your resume profile."""
     _common_options(dry_run, verbose, config)
-    _print_result(match.run(dry_run=dry_run))
+    _print_result(match.run(dry_run=dry_run, rescore_rejected=rescore_rejected))
 
 
 @app.command("compose")

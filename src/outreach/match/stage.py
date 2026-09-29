@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timedelta, timezone
 
 from sqlmodel import col, select
 
@@ -21,10 +22,50 @@ log = get_logger("match")
 
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
+RESCORE_MAX_AGE_DAYS = 14
+
+
+def _aware(dt: datetime) -> datetime:
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
 MATCH_SYSTEM = """You score how well a candidate fits a hiring post.
 Return JSON with keys: score (0-100 integer), reasoning (string), matched_skills (array), gaps (array).
 Be strict: inventing overlap is not allowed. Use only the resume facts provided.
 score guide: 80-100 strong fit, 60-79 plausible, 40-59 weak, 0-39 poor/wrong role."""
+
+_YEARS = re.compile(
+    r"(\d{1,2})(?:\.\d)?\s*(?:\+|plus)?\s*(?:(?:-|–|—|to)\s*\d{1,2}\s*\+?\s*)?(?:years?|yrs?)\b",
+    re.IGNORECASE,
+)
+_FRESHER = re.compile(r"\bfreshers?\b|\bentry[\s-]level\b|\b0\s*(?:-|to)\s*\d", re.IGNORECASE)
+
+
+def min_years_required(experience_required: str | None, raw_text: str | None) -> int | None:
+    """Smallest 'N years' figure in the post (structured field first), or None if absent."""
+    for text in (experience_required, raw_text):
+        if not text:
+            continue
+        found = [int(m.group(1)) for m in _YEARS.finditer(text)]
+        if found:
+            return min(found)
+        if _FRESHER.search(text):
+            return 0
+    return None
+
+
+def experience_policy(min_years: int | None, flex_max: int) -> str:
+    if min_years is not None and min_years <= flex_max:
+        return (
+            f"EXPERIENCE POLICY: the post asks for about {min_years}+ years. The candidate "
+            "applies to such roles regardless — do NOT lower the score for a years-of-experience "
+            "gap. Score on role and tech-stack fit only."
+        )
+    if min_years is None:
+        return (
+            f"EXPERIENCE POLICY: the post states no clear years requirement. Do not penalise "
+            f"experience unless it clearly demands more than {flex_max} years."
+        )
+    return ""
 
 
 def _parse_match(content: str) -> MatchResult:
@@ -46,7 +87,10 @@ def score_post(
     raw_text: str,
     client,
     temperature: float,
+    flex_max_years: int = 4,
 ) -> MatchResult:
+    policy = experience_policy(min_years_required(experience_required, raw_text), flex_max_years)
+    system = f"{MATCH_SYSTEM}\n{policy}" if policy else MATCH_SYSTEM
     post_block = {
         "role_title": role_title,
         "company_name": company_name,
@@ -57,7 +101,7 @@ def score_post(
     }
     response = client.complete(
         [
-            LlmMessage(role="system", content=MATCH_SYSTEM),
+            LlmMessage(role="system", content=system),
             LlmMessage(
                 role="user",
                 content=(
@@ -75,7 +119,7 @@ def score_post(
         # one retry
         retry = client.complete(
             [
-                LlmMessage(role="system", content=MATCH_SYSTEM),
+                LlmMessage(role="system", content=system),
                 LlmMessage(
                     role="user",
                     content=(
@@ -97,19 +141,37 @@ def _blacklisted_names() -> set[str]:
         return set(rows)
 
 
-def run(*, dry_run: bool = False) -> StageResult:
+def run(*, dry_run: bool = False, rescore_rejected: bool = False) -> StageResult:
     settings = get_settings()
     cutoff = settings.config.match.score_cutoff
+    flex_max = settings.config.match.experience_flex_max_years
 
+    statuses = [PostStatus.parsed, PostStatus.enriched]
+    if rescore_rejected:
+        statuses.append(PostStatus.rejected_match)
     with session_scope() as session:
         rows = list(
             session.exec(
                 select(Post)
-                .where(col(Post.status).in_([PostStatus.parsed, PostStatus.enriched]))
+                .where(col(Post.status).in_(statuses))
                 .where(Post.contact_email.is_not(None))  # type: ignore[union-attr]
                 .order_by(Post.id)
             ).all()
         )
+        # Re-score only recent rejects inside the experience window — others would fail again
+        # or point at openings that have likely closed.
+        fresh_after = datetime.now(timezone.utc) - timedelta(days=RESCORE_MAX_AGE_DAYS)
+        rows = [
+            p
+            for p in rows
+            if p.status != PostStatus.rejected_match
+            or (
+                p.ingested_at is not None
+                and _aware(p.ingested_at) >= fresh_after
+                and (years := min_years_required(p.experience_required, p.raw_text)) is not None
+                and years <= flex_max
+            )
+        ]
         posts = [
             {
                 "id": p.id,
@@ -125,7 +187,12 @@ def run(*, dry_run: bool = False) -> StageResult:
             for p in rows
         ]
 
-    details = [f"candidates={len(posts)}", f"cutoff={cutoff}"]
+    details = [
+        f"candidates={len(posts)}",
+        f"cutoff={cutoff}",
+        f"experience_flex_max_years={flex_max}",
+        f"rescore_rejected={rescore_rejected}",
+    ]
     if not posts:
         return StageResult(stage="match", dry_run=dry_run, details=details + ["nothing to match"])
 
@@ -173,6 +240,7 @@ def run(*, dry_run: bool = False) -> StageResult:
                 raw_text=post["raw_text"],
                 client=client,
                 temperature=settings.config.llm.temperature,
+                flex_max_years=flex_max,
             )
             with session_scope() as session:
                 db = session.get(Post, post["id"])

@@ -130,6 +130,29 @@ send:
   weekdays_only: true
   email_cooldown_days: 60
 
+# LinkedIn connection outreach: connections-sync → connections-review → connections-send
+# Review-gated and paced. Uses send.business_hours / timezone / weekdays_only.
+network:
+  daily_cap: 15
+  delay_seconds_min: 120  # 2-5 min between messages
+  delay_seconds_max: 300
+  headless: false
+  recent_days: 14  # connected within this many days → "we just connected" template
+  max_connections_scan: 400
+  max_profile_checks: 25  # profiles opened per sync (current company + years)
+  min_years: 4  # non-HR / non-leader titles need this many years
+  exclude_companies:
+    - "hangingpanda"
+    - "hanging panda"
+  template_recent: >-
+    Hi {first_name}, we just connected, and I'm already asking for something. 😅
+    I'm currently looking for a Full-Stack Developer role and wanted to check if there
+    are any relevant opportunities available in {org}. Happy to share my resume if that helps!
+  template_older: >-
+    Hi {first_name}, hope you're doing well! I'm currently looking for a Full-Stack
+    Developer role (React / Next.js / Node.js) and wanted to check if there are any
+    relevant opportunities at {org}. Happy to share my resume if that helps!
+
 llm:
   temperature: 0.2
   timeout_seconds: 60

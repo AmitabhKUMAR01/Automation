@@ -293,6 +293,46 @@ def cmd_shortlist(
                 console.print(f"Open {d.removeprefix('path=')}", markup=False)
 
 
+@app.command("connections-sync")
+def cmd_connections_sync(
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    config: Optional[str] = typer.Option(None, "--config"),
+) -> None:
+    """Scrape LinkedIn connections, verify profiles, draft job-ask messages for review."""
+    from outreach.network import stage as network
+
+    _common_options(dry_run, verbose, config)
+    _print_result(network.sync(dry_run=dry_run))
+
+
+@app.command("connections-review")
+def cmd_connections_review(
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    config: Optional[str] = typer.Option(None, "--config"),
+) -> None:
+    """Approve / edit / reject drafted LinkedIn messages."""
+    from outreach.network import stage as network
+
+    _common_options(dry_run, verbose, config)
+    _print_result(network.review(dry_run=dry_run))
+
+
+@app.command("connections-send")
+def cmd_connections_send(
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    force: bool = typer.Option(False, "--force", help="Bypass business-hours check (testing only)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    config: Optional[str] = typer.Option(None, "--config"),
+) -> None:
+    """Send approved LinkedIn messages (daily cap + random delays, stops on any warning)."""
+    from outreach.network import stage as network
+
+    _common_options(dry_run, verbose, config)
+    _print_result(network.send(dry_run=dry_run, force=force))
+
+
 @app.command("init-db")
 def cmd_init_db(
     verbose: bool = typer.Option(False, "--verbose", "-v"),

@@ -128,6 +128,32 @@ class SendConfig(BaseModel):
     email_cooldown_days: int = 60
 
 
+class NetworkConfig(BaseModel):
+    """LinkedIn connection outreach (review-gated, paced). Uses send.business_hours."""
+
+    daily_cap: int = 15
+    delay_seconds_min: int = 120
+    delay_seconds_max: int = 300
+    headless: bool = False
+    recent_days: int = 14
+    max_connections_scan: int = 400
+    max_profile_checks: int = 25
+    min_years: int = 4
+    exclude_companies: list[str] = Field(
+        default_factory=lambda: ["hangingpanda", "hanging panda"]
+    )
+    template_recent: str = (
+        "Hi {first_name}, we just connected, and I'm already asking for something. 😅 "
+        "I'm currently looking for a Full-Stack Developer role and wanted to check if there "
+        "are any relevant opportunities available in {org}. Happy to share my resume if that helps!"
+    )
+    template_older: str = (
+        "Hi {first_name}, hope you're doing well! I'm currently looking for a Full-Stack "
+        "Developer role (React / Next.js / Node.js) and wanted to check if there are any "
+        "relevant opportunities at {org}. Happy to share my resume if that helps!"
+    )
+
+
 class LlmYamlConfig(BaseModel):
     temperature: float = 0.2
     timeout_seconds: int = 60
@@ -144,6 +170,7 @@ class AppConfig(BaseModel):
     match: MatchConfig = Field(default_factory=MatchConfig)
     compose: ComposeConfig = Field(default_factory=ComposeConfig)
     send: SendConfig = Field(default_factory=SendConfig)
+    network: NetworkConfig = Field(default_factory=NetworkConfig)
     llm: LlmYamlConfig = Field(default_factory=LlmYamlConfig)
     database: DatabaseYamlConfig = Field(default_factory=DatabaseYamlConfig)
 

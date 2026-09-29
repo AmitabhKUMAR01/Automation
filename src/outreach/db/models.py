@@ -145,6 +145,55 @@ class CompanyBlacklist(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class ContactStatus(str, Enum):
+    discovered = "discovered"  # scraped from connections, profile not verified yet
+    excluded = "excluded"  # not a target (company rule, seniority, ...)
+    pending_review = "pending_review"
+    approved = "approved"
+    sent = "sent"
+    skipped = "skipped"  # rejected in review, or existing conversation at send time
+    failed = "failed"
+
+
+class LinkedInContact(SQLModel, table=True):
+    """A 1st-degree LinkedIn connection considered for a job-ask message."""
+
+    __tablename__ = "linkedin_contacts"
+    __table_args__ = (UniqueConstraint("profile_url", name="uq_linkedin_contact_url"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    profile_url: str = Field(max_length=1024, index=True)
+    name: str = Field(max_length=512)
+    headline: Optional[str] = Field(default=None, max_length=1024)
+    company: Optional[str] = Field(default=None, max_length=512)
+    connected_text: Optional[str] = Field(default=None, max_length=256)
+    connected_days: Optional[int] = Field(default=None)
+    category: Optional[str] = Field(default=None, max_length=32)  # hr | leader | senior | experienced
+    years_experience: Optional[int] = Field(default=None)
+    profile_checked: bool = Field(default=False)
+    status: ContactStatus = Field(default=ContactStatus.discovered, index=True)
+    excluded_reason: Optional[str] = Field(default=None, max_length=512)
+    message: Optional[str] = Field(default=None, sa_column=Column(Text))
+    last_error: Optional[str] = Field(default=None, sa_column=Column(Text))
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+    reviewed_at: Optional[datetime] = Field(default=None)
+    sent_at: Optional[datetime] = Field(default=None)
+
+
+class LinkedInMessageLog(SQLModel, table=True):
+    """One row per LinkedIn message sent. UNIQUE profile_url = never message twice."""
+
+    __tablename__ = "linkedin_message_log"
+    __table_args__ = (UniqueConstraint("profile_url", name="uq_linkedin_message_profile"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    contact_id: int = Field(foreign_key="linkedin_contacts.id", index=True)
+    profile_url: str = Field(max_length=1024)
+    message: str = Field(sa_column=Column(Text, nullable=False))
+    sent_at: datetime = Field(default_factory=utcnow, index=True)
+
+
 class ResumeCache(SQLModel, table=True):
     """Cached structured profile parsed from the resume PDF."""
 

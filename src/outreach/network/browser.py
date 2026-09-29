@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 import re
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from playwright.sync_api import Page
 
@@ -131,10 +132,26 @@ def read_experience(page: Page, profile_url: str) -> list[str]:
     )
 
 
+def _compose_url(page: Page) -> str | None:
+    href = page.evaluate(
+        """() => {
+          const links = Array.from(document.querySelectorAll('a[href*="/messaging/compose"]'));
+          const inMain = links.find(a => a.closest('main')) || links[0];
+          return inMain ? inMain.href : null;
+        }"""
+    )
+    if not href:
+        return None
+    parts = urlsplit(href)
+    query = [(k, v) for k, v in parse_qsl(parts.query) if k not in {"interop", "lipi"}]
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+
+
 def _message_box(page: Page):
     return page.locator(
         'div.msg-form__contenteditable[contenteditable="true"], '
-        'div[role="textbox"][contenteditable="true"]'
+        'div[role="textbox"][contenteditable="true"], '
+        'div[contenteditable="true"][aria-label*="message" i]'
     ).last
 
 
@@ -176,8 +193,14 @@ def send_message(page: Page, profile_url: str, message: str) -> str:
     check_not_blocked(page)
     _close_chat_overlays(page)
 
+    # The Message button is a link to /messaging/compose/?...&interop=msgOverlay; the overlay
+    # it opens is unreliable to automate, so open the same compose URL as a full page instead.
+    compose_url = _compose_url(page)
     opened = False
-    for locator in (
+    if compose_url:
+        page.goto(compose_url, wait_until="domcontentloaded")
+        opened = True
+    for locator in () if opened else (
         page.locator("main").get_by_role("button", name=re.compile(r"^message\b", re.I)),
         page.locator("main").get_by_role("link", name=re.compile(r"^message\b", re.I)),
         page.locator('main a[href*="/messaging/compose"]'),
@@ -192,14 +215,14 @@ def send_message(page: Page, profile_url: str, message: str) -> str:
     if not opened:
         return "no_message_button"
 
-    page.wait_for_timeout(int(random.uniform(2.0, 3.0) * 1000))
+    page.wait_for_timeout(int(random.uniform(3.0, 4.5) * 1000))
     check_not_blocked(page)
+    box = _message_box(page)
+    box.wait_for(state="visible", timeout=20_000)
     if _conversation_has_history(page):
         _close_chat_overlays(page)
         return "has_history"
 
-    box = _message_box(page)
-    box.wait_for(state="visible", timeout=8000)
     box.click()
     box.fill(message)
     # Nudge the editor so LinkedIn enables the Send button

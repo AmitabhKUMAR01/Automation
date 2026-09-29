@@ -340,9 +340,24 @@ def _mark(contact_id: int, status: ContactStatus, error: str) -> None:
             session.add(c)
 
 
-def send(*, dry_run: bool = False, force: bool = False) -> StageResult:
+def _requeue_failed() -> int:
+    with session_scope() as session:
+        rows = session.exec(
+            select(LinkedInContact).where(LinkedInContact.status == ContactStatus.failed)
+        ).all()
+        for c in rows:
+            c.status = ContactStatus.approved
+            c.last_error = None
+            c.updated_at = utcnow()
+            session.add(c)
+        return len(rows)
+
+
+def send(*, dry_run: bool = False, force: bool = False, retry_failed: bool = False) -> StageResult:
     settings = get_settings()
     cfg = settings.config.network
+    if retry_failed and not dry_run:
+        log.info("network_requeued_failed", count=_requeue_failed())
     today = messages_sent_today(settings)
     remaining = max(0, cfg.daily_cap - today)
     details = [f"daily_cap={cfg.daily_cap}", f"sent_today={today}", f"remaining={remaining}"]
@@ -369,7 +384,12 @@ def send(*, dry_run: bool = False, force: bool = False) -> StageResult:
     if not queue:
         return StageResult(stage="connections-send", dry_run=dry_run, details=details + ["nothing approved"])
     if dry_run:
-        details.extend(f"would message {q['name']} → {q['message'][:70]}..." for q in queue)
+        # Windows consoles (cp1252) choke on emoji in the template
+        details.extend(
+            f"would message {q['name']} -> "
+            f"{q['message'][:70].encode('ascii', 'ignore').decode()}..."
+            for q in queue
+        )
         return StageResult(stage="connections-send", dry_run=True, processed=len(queue), details=details)
 
     sent = skipped = failed = 0
@@ -391,10 +411,15 @@ def send(*, dry_run: bool = False, force: bool = False) -> StageResult:
                     failed += 1
                     consecutive_failures += 1
                     _mark(item["id"], ContactStatus.failed, str(exc))
-                    log.warning("network_send_failed", name=item["name"], error=str(exc))
+                    log.warning(
+                        "network_send_failed",
+                        name=item["name"],
+                        url=page.url,
+                        error=str(exc).splitlines()[0],
+                        debug=str(_dump_debug(page, settings)),
+                    )
                     if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                         details.append("stopped: repeated failures (LinkedIn UI may have changed)")
-                        _dump_debug(page, settings)
                         break
                     continue
 

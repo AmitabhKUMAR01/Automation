@@ -323,6 +323,9 @@ def cmd_connections_review(
 def cmd_connections_send(
     dry_run: bool = typer.Option(False, "--dry-run"),
     force: bool = typer.Option(False, "--force", help="Bypass business-hours check (testing only)"),
+    retry_failed: bool = typer.Option(
+        False, "--retry-failed", help="Put earlier failed sends back in the queue first"
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     config: Optional[str] = typer.Option(None, "--config"),
 ) -> None:
@@ -330,7 +333,7 @@ def cmd_connections_send(
     from outreach.network import stage as network
 
     _common_options(dry_run, verbose, config)
-    _print_result(network.send(dry_run=dry_run, force=force))
+    _print_result(network.send(dry_run=dry_run, force=force, retry_failed=retry_failed))
 
 
 @app.command("init-db")

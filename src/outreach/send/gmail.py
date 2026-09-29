@@ -7,6 +7,7 @@ import mimetypes
 from email.message import EmailMessage
 from pathlib import Path
 
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -35,10 +36,17 @@ def get_gmail_credentials(settings: Settings) -> Credentials:
         creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
 
     if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        token_path.parent.mkdir(parents=True, exist_ok=True)
-        token_path.write_text(creds.to_json(), encoding="utf-8")
-    elif not creds or not creds.valid:
+        try:
+            creds.refresh(Request())
+            token_path.parent.mkdir(parents=True, exist_ok=True)
+            token_path.write_text(creds.to_json(), encoding="utf-8")
+        except RefreshError as exc:
+            # Refresh tokens die after 7 days while the OAuth app is in "Testing".
+            log.warning("gmail_token_revoked_reauth", error=str(exc))
+            token_path.unlink(missing_ok=True)
+            creds = None
+
+    if not creds or not creds.valid:
         flow = InstalledAppFlow.from_client_secrets_file(str(secrets_path), SCOPES)
         creds = flow.run_local_server(port=0)
         token_path.parent.mkdir(parents=True, exist_ok=True)

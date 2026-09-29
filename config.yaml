@@ -35,7 +35,12 @@ ingest:
   dm:
     bookmark_contacts:
       - "Abhishek Kumar"
-    inbound_contacts: []  # optional friend names; empty + scan_recent = hiring-looking threads
+    inbound_contacts:  # friends who share jobs; when set, only these + bookmarks are scanned
+      - "Ankit Singh"
+      - "Abhishek Kumar"
+      - "Abdul Baroon"
+      - "Shiv Shankar"
+      - "Chandan Kumar"
     max_conversations: 15
     max_messages_per_thread: 40
     lookback_days: 30

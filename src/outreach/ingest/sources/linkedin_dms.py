@@ -40,6 +40,13 @@ MESSAGING_URL = "https://www.linkedin.com/messaging/"
 
 _URL_IN_TEXT = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 
+# Sidebar previews for shares hide the content ("Ankit sent a post"), so the
+# thread must be opened to know whether it is a job.
+_SHARE_PREVIEW = re.compile(
+    r"\b(?:sent|shared)\s+(?:a|an)\s+(?:post|link|attachment|article|job|document)\b",
+    re.IGNORECASE,
+)
+
 
 def _name_matches(haystack: str, needle: str) -> bool:
     h = " ".join((haystack or "").lower().split())
@@ -226,8 +233,12 @@ def _extract_thread_messages(page: Page, *, limit: int) -> list[dict[str, Any]]:
             '.msg-s-event-listitem, .msg-s-message-list__event, li.msg-s-message-list__event'
           ));
           for (const el of classic) {
+            // Shared posts render as a card outside the text body, so take
+            // whichever of body / whole item carries more content.
             const body = el.querySelector('.msg-s-event-listitem__body, .msg-s-event__content, p, span');
-            const text = body ? body.innerText : el.innerText;
+            const bodyText = body ? (body.innerText || '') : '';
+            const itemText = el.innerText || '';
+            const text = itemText.length > bodyText.length ? itemText : bodyText;
             const links = Array.from(el.querySelectorAll('a[href]')).map(a => a.href);
             const outgoing = !!(
               el.classList.contains('msg-s-event-listitem--other') === false
@@ -291,6 +302,8 @@ def _classify_conversation(
     if looks_like_hiring_post(blob, needles, require_role=False) or has_job_url(blob):
         return "inbound"
     if has_job_url(preview or ""):
+        return "inbound"
+    if _SHARE_PREVIEW.search(preview or ""):
         return "inbound"
     return None
 
@@ -413,8 +426,8 @@ class LinkedInDmsSource:
                 _scroll_conversation_list(page, random.randint(700, 1100))
                 page.wait_for_timeout(int(random.uniform(0.8, 1.6) * 1000))
 
-            # Always re-find bookmark contacts even if not in first page: use search box if present
-            for contact in bookmark:
+            # Watchlist contacts may be below the scrolled list; use search box if present
+            for contact in dict.fromkeys(bookmark + inbound):
                 if any(_name_matches(c["name"], contact) for c in conv_map.values()):
                     continue
                 found = _search_conversation(page, contact)

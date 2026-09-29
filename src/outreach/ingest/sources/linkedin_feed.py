@@ -14,6 +14,7 @@ from urllib.parse import urljoin
 from playwright.sync_api import Browser, Page, sync_playwright
 
 from outreach.config import Settings
+from outreach.ingest.known import load_known_inventory
 from outreach.ingest.sources.feed_filter import build_feed_needles, looks_like_hiring_post
 from outreach.logging import get_logger
 from outreach.parse.emails import extract_emails
@@ -302,6 +303,33 @@ def _extract_posts_from_page(page: Page) -> list[dict[str, Any]]:
     )
 
 
+def _load_more_feed(page: Page, *, hard_reload: bool) -> bool:
+    """Unstick an exhausted feed: 'Show more' / 'New posts' button, else reload."""
+    for label in ("Show more feed updates", "New posts", "Show more results", "See new posts"):
+        try:
+            btn = page.get_by_role("button", name=re.compile(label, re.I)).first
+            if btn.is_visible(timeout=500):
+                btn.click(timeout=1500)
+                page.wait_for_timeout(2500)
+                return True
+        except Exception:  # noqa: BLE001
+            continue
+    if not hard_reload:
+        _scroll_feed(page, -1200)
+        page.wait_for_timeout(1200)
+        _scroll_feed(page, 3000)
+        page.wait_for_timeout(2000)
+        return True
+    try:
+        page.goto(FEED_URL, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+        _dismiss_overlays(page)
+        return _wait_for_feed(page, max_wait_ms=15_000)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("linkedin_feed_reload_failed", error=str(exc))
+        return False
+
+
 def _wait_for_feed(page: Page, *, max_wait_ms: int = 25_000) -> bool:
     """Poll until new or legacy feed posts appear."""
     deadline = time.time() + max_wait_ms / 1000
@@ -343,11 +371,18 @@ class LinkedInFeedSource:
         soft_scrolls = max(1, cfg.feed_max_scrolls)
         hard_scrolls = max(soft_scrolls, cfg.feed_max_scrolls_hard)
         min_with_email = max(0, cfg.feed_min_with_email)
+        deadline = time.time() + max(0.5, cfg.feed_max_minutes) * 60
+        stall_limit = max(2, cfg.feed_stall_scrolls)
 
+        # Goal counts only emails we have never stored/sent — old posts reappear every run.
+        known = load_known_inventory()
         collected: dict[str, RawPost] = {}
+        new_emails: set[str] = set()
+        seen_cards: set[str] = set()
+        skipped_known = 0
 
         def _email_count() -> int:
-            return sum(1 for p in collected.values() if extract_emails(p.raw_text))
+            return len(new_emails)
 
         with sync_playwright() as p:
             browser = _launch_browser(p, headless=cfg.linkedin_headless)
@@ -393,11 +428,23 @@ class LinkedInFeedSource:
                     hint="Open data/debug/linkedin_feed_last.png to see what LinkedIn showed",
                 )
 
+            stalled = 0
+            refreshes = 0
+            scroll_i = -1
             for scroll_i in range(hard_scrolls):
+                if time.time() >= deadline:
+                    log.info("linkedin_feed_time_budget_hit", scrolls=scroll_i, minutes=cfg.feed_max_minutes)
+                    break
                 _expand_see_more(page)
+                page.wait_for_timeout(500)
                 raw_cards = _extract_posts_from_page(page)
+                fresh_cards = 0
                 for card in raw_cards:
                     text = (card.get("text") or "").strip()
+                    card_key = text[:160]
+                    if card_key not in seen_cards:
+                        seen_cards.add(card_key)
+                        fresh_cards += 1
                     if not looks_like_hiring_post(text, needles):
                         continue
                     url = _normalize_post_url(card.get("url")) or _synthetic_url(
@@ -405,7 +452,11 @@ class LinkedInFeedSource:
                     )
                     if url in collected:
                         continue
+                    if url in known.urls:
+                        skipped_known += 1
+                        continue
                     emails = extract_emails(text)
+                    new_emails.update(e.lower() for e in known.new_emails(text))
                     collected[url] = RawPost(
                         url=url,
                         raw_text=text[:8000],
@@ -418,18 +469,26 @@ class LinkedInFeedSource:
                             "emails_found": emails,
                         },
                     )
-                    if len(collected) >= max_posts and _email_count() >= min_with_email:
-                        break
-
                 with_email = _email_count()
                 log.info(
                     "linkedin_feed_scroll",
                     scroll=scroll_i + 1,
                     cards=len(raw_cards),
+                    fresh_cards=fresh_cards,
                     hiring_kept=len(collected),
-                    with_email=with_email,
+                    new_emails=with_email,
+                    skipped_known=skipped_known,
                     min_with_email=min_with_email,
+                    seconds_left=int(max(0, deadline - time.time())),
                 )
+
+                stalled = stalled + 1 if fresh_cards == 0 else 0
+                if stalled >= stall_limit:
+                    refreshes += 1
+                    log.info("linkedin_feed_stalled", refresh=refreshes)
+                    if not _load_more_feed(page, hard_reload=refreshes % 3 == 0):
+                        break
+                    stalled = 0
 
                 # Soft stop: enough email posts (or filled max_posts and email goal met)
                 if with_email >= min_with_email:
@@ -438,8 +497,6 @@ class LinkedInFeedSource:
                         with_email=with_email,
                         scrolls=scroll_i + 1,
                     )
-                    break
-                if len(collected) >= max_posts and with_email >= min_with_email:
                     break
                 # Past soft scroll budget but still short on emails → keep going to hard cap
                 if scroll_i + 1 >= soft_scrolls and with_email < min_with_email:
@@ -461,6 +518,7 @@ class LinkedInFeedSource:
                     with_email=with_email,
                     min_with_email=min_with_email,
                     hiring_kept=len(collected),
+                    skipped_known=skipped_known,
                     hint="Feed may not have enough role+email posts right now",
                 )
 
@@ -476,19 +534,18 @@ class LinkedInFeedSource:
             if not cfg.linkedin_headless:
                 print(
                     f"\nFeed scrape finished "
-                    f"(kept {len(collected)} hiring posts, {with_email} with email). "
+                    f"(kept {len(collected)} new hiring posts, {with_email} new emails, "
+                    f"{skipped_known} already in DB, {scroll_i + 1} scrolls). "
                     "Closing browser in 3s...\n"
                 )
                 page.wait_for_timeout(3000)
 
             browser.close()
 
-        # Prefer email-bearing posts first when returning (still capped)
-        ordered = sorted(
-            collected.values(),
-            key=lambda p: (0 if extract_emails(p.raw_text) else 1, p.url),
-        )
-        posts = ordered[:max_posts]
+        # Every email post is kept; max_posts only caps the no-email filler.
+        with_mail = [p for p in collected.values() if extract_emails(p.raw_text)]
+        without = [p for p in collected.values() if not extract_emails(p.raw_text)]
+        posts = with_mail + without[: max(0, max_posts - len(with_mail))]
         log.info(
             "linkedin_feed_done",
             kept=len(posts),

@@ -162,28 +162,27 @@ class ApifyLinkedInSource:
     def __init__(self, settings: Settings):
         self.settings = settings
 
-    def build_input(self) -> dict[str, Any]:
+    def queries(self) -> list[str]:
         cfg = self.settings.config.ingest
-        keyword = build_keyword(cfg.search_terms, cfg.target_roles)
-        date_filter = _lookback_to_date_filter(cfg.lookback_days)
+        custom = [q.strip() for q in cfg.post_search_queries if q.strip()]
+        return custom or [build_keyword(cfg.search_terms, cfg.target_roles)]
+
+    def build_input(self, keyword: str | None = None) -> dict[str, Any]:
+        cfg = self.settings.config.ingest
+        per_query = max(1, min(cfg.post_search_per_query, 50))
         payload: dict[str, Any] = {
-            "keyword": keyword,
+            "keyword": keyword or self.queries()[0],
             "sort_type": "date_posted",
-            "date_filter": date_filter,
-            "total_posts": min(cfg.max_posts_per_run, 100),
-            "limit": min(cfg.max_posts_per_run, 50),
+            "date_filter": _lookback_to_date_filter(cfg.lookback_days),
+            "total_posts": per_query,
+            "limit": per_query,
         }
         return payload
 
-    def fetch(self) -> list[RawPost]:
-        token = self.settings.secrets.apify_api_token
-        if not token:
-            raise RuntimeError("APIFY_API_TOKEN (or APIFY_API_KEY) is required for ingest.source=apify")
-
+    def _run_query(self, token: str, keyword: str) -> list[Any]:
         actor_id = self.settings.secrets.apify_actor_id.replace("/", "~")
-        run_input = self.build_input()
+        run_input = self.build_input(keyword)
         log.info("apify_fetch_start", actor=self.settings.secrets.apify_actor_id, input=run_input)
-
         # Sync endpoint returns dataset items directly (up to ~300s).
         # Auth via Bearer header — never put the token in the URL (avoids log leaks).
         url = f"{APIFY_BASE}/acts/{actor_id}/run-sync-get-dataset-items"
@@ -197,20 +196,48 @@ class ApifyLinkedInSource:
         )
         if not isinstance(items, list):
             raise RuntimeError(f"Unexpected Apify response type: {type(items)}")
+        return items
 
-        cutoff = datetime.now(timezone.utc) - timedelta(days=self.settings.config.ingest.lookback_days)
-        posts: list[RawPost] = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            raw = item_to_raw_post(item)
-            if raw is None:
-                continue
-            if raw.posted_at and raw.posted_at < cutoff:
-                continue
-            posts.append(raw)
-            if len(posts) >= self.settings.config.ingest.max_posts_per_run:
+    def fetch(self) -> list[RawPost]:
+        token = self.settings.secrets.apify_api_token
+        if not token:
+            raise RuntimeError("APIFY_API_TOKEN (or APIFY_API_KEY) is required for ingest.source=apify")
+
+        from outreach.ingest.known import load_known_inventory
+
+        cfg = self.settings.config.ingest
+        known = load_known_inventory()
+        cutoff = datetime.now(timezone.utc) - timedelta(days=cfg.lookback_days)
+        collected: dict[str, RawPost] = {}
+        for keyword in self.queries():
+            if len(collected) >= cfg.post_search_max_total:
                 break
+            try:
+                items = self._run_query(token, keyword)
+            except Exception as exc:  # noqa: BLE001
+                # One bad query should not lose the others' results
+                log.warning("apify_query_failed", keyword=keyword, error=str(exc))
+                continue
+            fresh = 0
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                raw = item_to_raw_post(item)
+                if raw is None or raw.url in collected or raw.url in known.urls:
+                    continue
+                if raw.posted_at and raw.posted_at < cutoff:
+                    continue
+                collected[raw.url] = raw
+                fresh += 1
+                if len(collected) >= cfg.post_search_max_total:
+                    break
+            log.info("apify_query_done", keyword=keyword, fetched=len(items), new=fresh)
 
-        log.info("apify_fetch_done", fetched=len(items), kept=len(posts))
+        posts = list(collected.values())
+        log.info(
+            "apify_fetch_done",
+            queries=len(self.queries()),
+            kept=len(posts),
+            new_emails=sum(1 for p in posts if known.new_emails(p.raw_text)),
+        )
         return posts

@@ -17,7 +17,33 @@ ingest:
     - "fullstack"
     - "react developer"
     - "node.js"
+    # Spelling variants — the feed/DM filter needs a literal substring match
+    - "react.js"
+    - "reactjs"
+    - "react js"
+    - "nodejs"
+    - "node js"
+    - "mern"
+    - "next.js"
+    - "nextjs"
+    - "frontend developer"
+    - "front end developer"
+    - "front-end developer"
+    - "javascript developer"
+    - "typescript"
   max_posts_per_run: 30
+  # Post search (Apify): each query is one actor run, sorted newest first.
+  # Cost scales with queries x post_search_per_query.
+  post_search_queries:
+    - 'hiring "full stack developer"'
+    - 'hiring "react developer" OR "react.js developer"'
+    - 'hiring "node.js developer" OR "nodejs developer"'
+    - 'hiring "mern stack developer"'
+    - 'hiring "next.js developer"'
+    - '"share your resume" "full stack"'
+    - '"send your cv" react node'
+  post_search_per_query: 20
+  post_search_max_total: 120
   csv_path: fixtures/sample_posts.csv
   # Playwright personal-feed settings (used when source: linkedin_feed)
   linkedin_storage_state: credentials/linkedin_storage_state.json
@@ -25,8 +51,11 @@ ingest:
   feed_max_scrolls: 12
   # Keep scrolling until at least N role-fit posts contain a sendable email
   # (or feed_max_scrolls_hard is hit — whichever comes first)
+  # Counts only NEW emails (not already in DB / sent / cooldown)
   feed_min_with_email: 5
-  feed_max_scrolls_hard: 40
+  feed_max_scrolls_hard: 150
+  feed_max_minutes: 10  # wall-clock cap; stops at whichever limit hits first
+  feed_stall_scrolls: 4  # no new cards this many times → "show more" / reload
   feed_scroll_pause_min: 2.0
   feed_scroll_pause_max: 4.5
   feed_navigation_timeout_ms: 60000
@@ -77,7 +106,7 @@ enrich:
     - "talent acquisition"
 
 match:
-  resume_path: resume/10_Sep_Amitabh_Kumar_Full_Stack_Resume.pdf
+  resume_path: resume/27_Sep_Amitabh_Kumar_Full_Stack_Resume.pdf
   score_cutoff: 60  # 0-100; posts below this are skipped
 
 compose:
@@ -87,8 +116,8 @@ compose:
 
 send:
   require_approval: true  # must be explicitly set to false to auto-send
-  resume_attachment_path: resume/10_Sep_Amitabh_Kumar_Full_Stack_Resume.pdf
-  max_sends_per_day: 25
+  resume_attachment_path: resume/27_Sep_Amitabh_Kumar_Full_Stack_Resume.pdf
+  max_sends_per_day: 25 
   delay_seconds_min: 45
   delay_seconds_max: 180
   timezone: "Asia/Kolkata"

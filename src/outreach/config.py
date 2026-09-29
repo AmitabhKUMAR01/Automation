@@ -74,6 +74,10 @@ class IngestConfig(BaseModel):
     # Keep scrolling (up to feed_max_scrolls_hard) until this many posts contain an email
     feed_min_with_email: int = 5
     feed_max_scrolls_hard: int = 40
+    # Wall-clock budget for the feed scroll loop (whichever of scrolls/minutes hits first)
+    feed_max_minutes: float = 10.0
+    # Consecutive scrolls with no new cards before we try to load more / refresh the feed
+    feed_stall_scrolls: int = 4
     feed_scroll_pause_min: float = 2.0
     feed_scroll_pause_max: float = 4.5
     feed_navigation_timeout_ms: int = 60000
@@ -81,6 +85,10 @@ class IngestConfig(BaseModel):
     dm: DmIngestConfig = Field(default_factory=DmIngestConfig)
     # Naukri discovery (Playwright) — shortlist only, never auto-apply
     naukri: NaukriIngestConfig = Field(default_factory=NaukriIngestConfig)
+    # Apify post search: several short queries beat one OR-tree; empty = auto keyword
+    post_search_queries: list[str] = Field(default_factory=list)
+    post_search_per_query: int = 25
+    post_search_max_total: int = 100
 
 
 class ParseConfig(BaseModel):

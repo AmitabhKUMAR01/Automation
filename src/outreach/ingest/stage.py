@@ -56,15 +56,12 @@ def _source_details(source: Source) -> list[str]:
     details: list[str] = [f"source={source.name}"]
 
     if source.name == "apify":
-        from outreach.ingest.sources.apify import build_keyword
-
-        keyword = build_keyword(
-            settings.config.ingest.search_terms,
-            settings.config.ingest.target_roles,
-        )
-        details.append(f"keyword={keyword!r}")
-        details.append(f"lookback_days={settings.config.ingest.lookback_days}")
-        details.append(f"max_posts={settings.config.ingest.max_posts_per_run}")
+        cfg = settings.config.ingest
+        queries = source.queries()  # type: ignore[attr-defined]
+        details.append(f"queries={len(queries)} per_query={cfg.post_search_per_query}")
+        details.extend(f"  q: {q}" for q in queries)
+        details.append(f"lookback_days={cfg.lookback_days}")
+        details.append(f"max_total={cfg.post_search_max_total}")
         details.append(f"actor={settings.secrets.apify_actor_id}")
     elif source.name == "linkedin_feed":
         cfg = settings.config.ingest
@@ -72,6 +69,7 @@ def _source_details(source: Source) -> list[str]:
         details.append(f"max_scrolls={cfg.feed_max_scrolls}")
         details.append(f"min_with_email={cfg.feed_min_with_email}")
         details.append(f"hard_scrolls={cfg.feed_max_scrolls_hard}")
+        details.append(f"max_minutes={cfg.feed_max_minutes}")
         details.append(f"storage={cfg.linkedin_storage_state}")
         details.append(f"headless={cfg.linkedin_headless}")
     elif source.name == "linkedin_dms":

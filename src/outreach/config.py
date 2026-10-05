@@ -222,8 +222,15 @@ class Secrets(BaseSettings):
     llm_provider: str = "openai"
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o-mini"
-    anthropic_api_key: str | None = None
+    anthropic_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
+    )
     anthropic_model: str = "claude-3-5-haiku-latest"
+    anthropic_base_url: str = Field(
+        default="https://api.anthropic.com",
+        validation_alias=AliasChoices("ANTHROPIC_BASE_URL"),
+    )
     gemini_api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("GEMINI_API_KEY", "GOOGLE_API_KEY"),

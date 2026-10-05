@@ -119,7 +119,7 @@ class ComposeConfig(BaseModel):
 class SendConfig(BaseModel):
     require_approval: bool = True
     resume_attachment_path: str = "resume/resume.pdf"
-    max_sends_per_day: int = 25
+    max_sends_per_day: int = 100
     delay_seconds_min: int = 45
     delay_seconds_max: int = 180
     timezone: str = "Asia/Kolkata"
@@ -128,8 +128,43 @@ class SendConfig(BaseModel):
     email_cooldown_days: int = 60
 
 
+class ProspectsConfig(BaseModel):
+    """Connection requests to HR / leaders / seniors found via LinkedIn people search."""
+
+    daily_cap: int = 15
+    weekly_cap: int = 80
+    delay_seconds_min: int = 60
+    delay_seconds_max: int = 180
+    # LinkedIn network filter: S = 2nd degree, O = 3rd+
+    network: list[str] = Field(default_factory=lambda: ["S"])
+    locations: list[str] = Field(default_factory=lambda: ["Noida", "Delhi", "Gurugram"])
+    # A result is kept only if its location line contains one of these
+    location_aliases: list[str] = Field(
+        default_factory=lambda: ["noida", "delhi", "gurgaon", "gurugram", "ncr"]
+    )
+    titles: list[str] = Field(
+        default_factory=lambda: [
+            "HR",
+            "HR Recruiter",
+            "Talent Acquisition",
+            "Technical Recruiter",
+            "IT Recruiter",
+        ]
+    )
+    # Headline categories allowed to be invited (hr | leader | senior)
+    allowed_categories: list[str] = Field(default_factory=lambda: ["hr"])
+    # Whole-word match against the headline; people search has no company-size filter
+    exclude_large_companies: list[str] = Field(default_factory=list)
+    # titles x locations can be 30+ searches; rotate a few per run to keep page views low
+    max_queries_per_run: int = 6
+    max_pages_per_query: int = 2
+    max_new_per_run: int = 60
+
+
 class NetworkConfig(BaseModel):
     """LinkedIn connection outreach (review-gated, paced). Uses send.business_hours."""
+
+    prospects: ProspectsConfig = Field(default_factory=ProspectsConfig)
 
     daily_cap: int = 15
     delay_seconds_min: int = 120
@@ -189,6 +224,17 @@ class Secrets(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-3-5-haiku-latest"
+    gemini_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    )
+    # Alias tracks the current Flash model; pinned versions get retired for new keys
+    gemini_model: str = "gemini-flash-latest"
+    # Tried in order when a model is overloaded (503) or retired; each has its own free quota
+    gemini_models: str = "gemini-flash-latest,gemini-3.5-flash,gemini-flash-lite-latest"
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    # Ordered fallback, e.g. "openai,gemini". Empty = single LLM_PROVIDER.
+    llm_providers: str | None = None
 
     apify_api_token: str | None = Field(
         default=None,

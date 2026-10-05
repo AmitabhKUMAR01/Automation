@@ -125,6 +125,26 @@ nobody is messaged twice · existing chats skipped · stops on any LinkedIn warn
 
 ---
 
+## 4b. LinkedIn connection requests (grow network in Noida / Delhi / Gurugram)
+
+Flow: **prospects-search → prospects-review → prospects-invite** → (they accept) → section 4
+
+```powershell
+uv run pipeline prospects-search             # people search: HR at small/mid companies (no MNCs) x Noida/Delhi/Gurgaon, 2nd degree
+uv run pipeline prospects-review             # approve / reject; A = approve all remaining
+uv run pipeline prospects-invite             # connection requests, no note (15/day, 80/week, 1-3 min apart)
+uv run pipeline prospects-invite --dry-run   # preview who would be invited
+uv run pipeline prospects-stats              # invited / accepted / acceptance rate / budget left
+```
+
+Review keys (prospects): `a` approve · `r` reject · `s` skip · `A` approve this + all remaining · `q` quit
+
+After people accept, run `connections-sync` → they get the "we just connected" message via
+`connections-review` / `connections-send`. Keep acceptance rate above ~25% (`prospects-stats`).
+Each search run covers 6 of the 30 title x city searches; the rotation changes daily.
+
+---
+
 ## 5. Status and debugging
 
 ```powershell
@@ -153,4 +173,13 @@ Debug artifacts: `data/debug/linkedin_feed_last.png` and `.html` (saved when a s
 | Email re-contact window | `send.email_cooldown_days` |
 | Hunter email lookup | `enrich.enabled` (+ `HUNTER_API_KEY` in `.env`) |
 | LinkedIn message cap / delays / templates | `network.daily_cap`, `network.delay_seconds_*`, `network.template_*` |
-| Companies never to message | `network.exclude_companies` |
+| Companies never to message / invite | `network.exclude_companies` |
+| Invite caps / delays | `network.prospects.daily_cap`, `weekly_cap`, `delay_seconds_*` |
+| Invite targets (titles, cities, degree) | `network.prospects.titles`, `locations`, `network` |
+| LLM provider order / free fallback | `.env`: `LLM_PROVIDERS=openai,gemini`, `GEMINI_API_KEY`, `GEMINI_MODEL` |
+uv run pipeline ingest -s all
+uv run pipeline parse
+uv run pipeline match
+uv run pipeline compose
+uv run pipeline review
+uv run pipeline send

@@ -45,6 +45,16 @@ def mentions_excluded_company(text: str | None, excluded: list[str]) -> bool:
     return any(compact(name) and compact(name) in haystack for name in excluded)
 
 
+def mentions_company_word(text: str | None, names: list[str]) -> str | None:
+    """Whole-word company match ('IBM' must not hit 'NIBM'); returns the matched name."""
+    lowered = " ".join((text or "").lower().split())
+    for name in names:
+        n = " ".join(name.lower().split())
+        if n and re.search(rf"(?<![a-z0-9]){re.escape(n)}(?![a-z0-9])", lowered):
+            return name
+    return None
+
+
 def categorize(headline: str | None) -> str | None:
     """hr | leader | senior from the headline, or None when it says nothing useful."""
     if not headline:

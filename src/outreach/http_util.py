@@ -29,17 +29,14 @@ def _is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, httpx.TransportError):
         return True
     if isinstance(exc, HttpError) and exc.status_code is not None:
+        # 429 "no credit" never recovers by waiting — fail fast so fallbacks kick in
+        if "insufficient_quota" in (exc.body or "") or "credit_balance" in (exc.body or ""):
+            return False
         return _should_retry_status(exc.status_code)
     return False
 
 
-@retry(
-    retry=retry_if_exception(_is_retryable),
-    wait=wait_exponential(multiplier=1, min=1, max=30),
-    stop=stop_after_attempt(4),
-    reraise=True,
-)
-def request_json(
+def request_json_once(
     method: str,
     url: str,
     *,
@@ -73,3 +70,12 @@ def request_json(
         if not response.content:
             return None
         return response.json()
+
+
+# Callers with their own fallback (e.g. the LLM chain) use request_json_once to move on fast.
+request_json = retry(
+    retry=retry_if_exception(_is_retryable),
+    wait=wait_exponential(multiplier=1, min=1, max=30),
+    stop=stop_after_attempt(4),
+    reraise=True,
+)(request_json_once)

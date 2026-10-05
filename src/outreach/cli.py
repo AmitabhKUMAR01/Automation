@@ -336,6 +336,58 @@ def cmd_connections_send(
     _print_result(network.send(dry_run=dry_run, force=force, retry_failed=retry_failed))
 
 
+@app.command("prospects-search")
+def cmd_prospects_search(
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    config: Optional[str] = typer.Option(None, "--config"),
+) -> None:
+    """Find HR / leaders / seniors (2nd degree, Noida/Delhi/Gurugram) for connection requests."""
+    from outreach.network import prospect_stage
+
+    _common_options(dry_run, verbose, config)
+    _print_result(prospect_stage.search(dry_run=dry_run))
+
+
+@app.command("prospects-review")
+def cmd_prospects_review(
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    config: Optional[str] = typer.Option(None, "--config"),
+) -> None:
+    """Approve / reject prospects (A = approve all remaining)."""
+    from outreach.network import prospect_stage
+
+    _common_options(dry_run, verbose, config)
+    _print_result(prospect_stage.review(dry_run=dry_run))
+
+
+@app.command("prospects-invite")
+def cmd_prospects_invite(
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    force: bool = typer.Option(False, "--force", help="Bypass business-hours check (testing only)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    config: Optional[str] = typer.Option(None, "--config"),
+) -> None:
+    """Send connection requests (no note) to approved prospects — daily + weekly caps."""
+    from outreach.network import prospect_stage
+
+    _common_options(dry_run, verbose, config)
+    _print_result(prospect_stage.invite(dry_run=dry_run, force=force))
+
+
+@app.command("prospects-stats")
+def cmd_prospects_stats(
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    config: Optional[str] = typer.Option(None, "--config"),
+) -> None:
+    """Invited / accepted counts, acceptance rate, remaining invite budget."""
+    from outreach.network import prospect_stage
+
+    _common_options(False, verbose, config)
+    _print_result(prospect_stage.stats())
+
+
 @app.command("init-db")
 def cmd_init_db(
     verbose: bool = typer.Option(False, "--verbose", "-v"),

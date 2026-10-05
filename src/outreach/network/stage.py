@@ -170,6 +170,11 @@ def sync(*, dry_run: bool = False) -> StageResult:
             cards = li.scrape_connections(page, max_items=cfg.max_connections_scan)
             inserted, pre_excluded = _upsert_connections(cards, cfg.exclude_companies)
             details.append(f"scanned={len(cards)} new={inserted} excluded_by_headline={pre_excluded}")
+            from outreach.network.prospect_stage import mark_accepted
+
+            accepted = mark_accepted({c["profile_url"] for c in cards})
+            if accepted:
+                details.append(f"invites_accepted={accepted}")
 
             for item in _contacts_to_verify(cfg.max_profile_checks):
                 try:

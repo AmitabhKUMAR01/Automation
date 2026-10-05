@@ -194,6 +194,40 @@ class LinkedInMessageLog(SQLModel, table=True):
     sent_at: datetime = Field(default_factory=utcnow, index=True)
 
 
+class ProspectStatus(str, Enum):
+    found = "found"
+    excluded = "excluded"
+    pending_review = "pending_review"
+    approved = "approved"
+    invited = "invited"
+    accepted = "accepted"  # now a 1st-degree connection (seen by connections-sync)
+    skipped = "skipped"  # rejected in review, already pending/connected, follow-only, ...
+    failed = "failed"
+
+
+class LinkedInProspect(SQLModel, table=True):
+    """A not-yet-connected person found via people search, considered for an invite."""
+
+    __tablename__ = "linkedin_prospects"
+    __table_args__ = (UniqueConstraint("profile_url", name="uq_linkedin_prospect_url"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    profile_url: str = Field(max_length=1024, index=True)
+    name: str = Field(max_length=512)
+    headline: Optional[str] = Field(default=None, max_length=1024)
+    location: Optional[str] = Field(default=None, max_length=256)
+    category: Optional[str] = Field(default=None, max_length=32)
+    search_query: Optional[str] = Field(default=None, max_length=256)
+    status: ProspectStatus = Field(default=ProspectStatus.pending_review, index=True)
+    excluded_reason: Optional[str] = Field(default=None, max_length=512)
+    last_error: Optional[str] = Field(default=None, sa_column=Column(Text))
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+    reviewed_at: Optional[datetime] = Field(default=None)
+    invited_at: Optional[datetime] = Field(default=None, index=True)
+    accepted_at: Optional[datetime] = Field(default=None)
+
+
 class ResumeCache(SQLModel, table=True):
     """Cached structured profile parsed from the resume PDF."""
 

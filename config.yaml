@@ -106,7 +106,7 @@ enrich:
     - "talent acquisition"
 
 match:
-  resume_path: resume/27_Sep_Amitabh_Kumar_Full_Stack_Resume.pdf
+  resume_path: resume/29_Sep_Amitabh_Kumar_Full_Stack_Resume_.pdf
   score_cutoff: 60  # 0-100; posts below this are skipped
   # Apply to roles asking up to N years min (e.g. "1-4 yrs", "3+ years") without
   # the matcher penalising the gap. Roles asking more are judged strictly.
@@ -119,8 +119,8 @@ compose:
 
 send:
   require_approval: true  # must be explicitly set to false to auto-send
-  resume_attachment_path: resume/27_Sep_Amitabh_Kumar_Full_Stack_Resume.pdf
-  max_sends_per_day: 25 
+  resume_attachment_path: resume/29_Sep_Amitabh_Kumar_Full_Stack_Resume_.pdf
+  max_sends_per_day: 100 
   delay_seconds_min: 45
   delay_seconds_max: 180
   timezone: "Asia/Kolkata"
@@ -152,6 +152,120 @@ network:
     Hi {first_name}, hope you're doing well! I'm currently looking for a Full-Stack
     Developer role (React / Next.js / Node.js) and wanted to check if there are any
     relevant opportunities at {org}. Happy to share my resume if that helps!
+  # Connection requests: prospects-search → prospects-review → prospects-invite
+  # No note is sent; once they accept, connections-sync/-send delivers the job ask.
+  prospects:
+    daily_cap: 15
+    weekly_cap: 80  # stays well under LinkedIn's weekly invitation limit
+    delay_seconds_min: 60
+    delay_seconds_max: 180
+    network: ["S"]  # S = 2nd-degree only
+    locations: ["Noida", "Delhi", "Gurugram"]
+    location_aliases: ["noida", "delhi", "gurgaon", "gurugram", "ncr"]
+    titles:  # HR only — searched as "<title> <city>"
+      - "HR"
+      - "HR Recruiter"
+      - "Talent Acquisition"
+      - "Technical Recruiter"
+      - "IT Recruiter"
+    allowed_categories: ["hr"]  # add "leader" / "senior" to widen again
+    # Small / mid companies only: anyone whose headline names one of these is skipped.
+    # (LinkedIn free search has no company-size filter — extend this list as you spot MNCs.)
+    exclude_large_companies:
+      # IT services / consulting
+      - "TCS"
+      - "Tata Consultancy"
+      - "Infosys"
+      - "Wipro"
+      - "HCL"
+      - "HCLTech"
+      - "Tech Mahindra"
+      - "Accenture"
+      - "Cognizant"
+      - "Capgemini"
+      - "IBM"
+      - "LTIMindtree"
+      - "Mindtree"
+      - "LTI"
+      - "Mphasis"
+      - "Hexaware"
+      - "Coforge"
+      - "Persistent Systems"
+      - "Nagarro"
+      - "Birlasoft"
+      - "Zensar"
+      - "EPAM"
+      - "GlobalLogic"
+      - "Publicis Sapient"
+      - "NTT Data"
+      - "DXC"
+      - "Genpact"
+      - "Concentrix"
+      - "Teleperformance"
+      - "EXL"
+      - "WNS"
+      - "Deloitte"
+      - "EY"
+      - "Ernst & Young"
+      - "KPMG"
+      - "PwC"
+      - "McKinsey"
+      - "BCG"
+      - "Bain"
+      - "ZS Associates"
+      # Big tech / product
+      - "Google"
+      - "Microsoft"
+      - "Amazon"
+      - "AWS"
+      - "Meta"
+      - "Apple"
+      - "Oracle"
+      - "SAP"
+      - "Adobe"
+      - "Salesforce"
+      - "Cisco"
+      - "Intel"
+      - "Dell"
+      - "HP"
+      - "Samsung"
+      - "Qualcomm"
+      - "Nvidia"
+      - "Uber"
+      - "Walmart"
+      - "Flipkart"
+      - "Paytm"
+      - "Zomato"
+      - "Swiggy"
+      - "Ericsson"
+      - "Nokia"
+      - "Siemens"
+      - "Bosch"
+      # Banks / finance / telecom / conglomerates
+      - "JPMorgan"
+      - "J.P. Morgan"
+      - "Goldman Sachs"
+      - "Morgan Stanley"
+      - "Barclays"
+      - "HSBC"
+      - "American Express"
+      - "Wells Fargo"
+      - "Citi"
+      - "Optum"
+      - "UnitedHealth"
+      - "Reliance"
+      - "Jio"
+      - "Airtel"
+      - "Adani"
+      # Large staffing firms
+      - "Randstad"
+      - "Adecco"
+      - "TeamLease"
+      - "Quess"
+      - "ManpowerGroup"
+    max_queries_per_run: 6  # 15 title x city searches, rotated across days
+    max_pages_per_query: 2
+    max_new_per_run: 60
 
 llm:
   temperature: 0.2

@@ -69,10 +69,18 @@ class OpenAIClient:
 class AnthropicClient:
     provider = "anthropic"
 
-    def __init__(self, api_key: str, model: str, *, timeout_seconds: int = 60):
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        *,
+        timeout_seconds: int = 60,
+        base_url: str = "https://api.anthropic.com",
+    ):
         self.api_key = api_key
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.base_url = base_url.rstrip("/")
 
     def complete(
         self,
@@ -95,14 +103,23 @@ class AnthropicClient:
         if system:
             payload["system"] = system
 
+        endpoint = (
+            f"{self.base_url}/messages"
+            if self.base_url.endswith("/v1")
+            else f"{self.base_url}/v1/messages"
+        )
+        headers = {
+            "x-api-key": self.api_key,
+            "Authorization": f"Bearer {self.api_key}",
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "claude-code-20250219",
+            "user-agent": "claude-cli/0.2.29 (external, sdk-cli)",
+            "Content-Type": "application/json",
+        }
         data = request_json(
             "POST",
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": self.api_key,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            },
+            endpoint,
+            headers=headers,
             json=payload,
             timeout=float(self.timeout_seconds),
         )
@@ -252,7 +269,14 @@ def _build(name: str, settings: Settings, *, all_gemini_models: bool) -> list[Ll
             for model in models
         ]
     if name == "anthropic" and s.anthropic_api_key:
-        return [AnthropicClient(s.anthropic_api_key, s.anthropic_model, timeout_seconds=timeout)]
+        return [
+            AnthropicClient(
+                s.anthropic_api_key,
+                s.anthropic_model,
+                timeout_seconds=timeout,
+                base_url=s.anthropic_base_url,
+            )
+        ]
     return []
 
 

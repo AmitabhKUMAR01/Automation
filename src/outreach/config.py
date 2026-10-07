@@ -233,6 +233,9 @@ class Secrets(BaseSettings):
     # Tried in order when a model is overloaded (503) or retired; each has its own free quota
     gemini_models: str = "gemini-flash-latest,gemini-3.5-flash,gemini-flash-lite-latest"
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    groq_api_key: str | None = None
+    groq_models: str = "openai/gpt-oss-120b,openai/gpt-oss-20b"
+    groq_base_url: str = "https://api.groq.com/openai/v1"
     # Ordered fallback, e.g. "openai,gemini". Empty = single LLM_PROVIDER.
     llm_providers: str | None = None
 

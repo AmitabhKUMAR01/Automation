@@ -10,11 +10,12 @@ from sqlmodel import select
 from outreach.config import get_settings
 from outreach.db.models import DraftStatus, EmailDraft, Post, PostStatus, utcnow
 from outreach.db.session import session_scope
-from outreach.llm import get_llm_client
+from outreach.llm import LlmUnavailable, get_llm_client
 from outreach.logging import get_logger
 from outreach.match.resume import load_or_build_profile
 from outreach.compose.schema import ComposeDraft
 from outreach.protocols import LlmMessage
+from outreach.send.guards import cooldown_blocks
 from outreach.stages import StageResult
 
 log = get_logger("compose")
@@ -138,6 +139,27 @@ def generate_draft(
     return validate_draft(draft, max_words=max_words, post_text=post.get("raw_text", ""))
 
 
+def _emails_with_open_drafts() -> set[str]:
+    open_states = (DraftStatus.pending_review, DraftStatus.approved, DraftStatus.edited)
+    with session_scope() as session:
+        rows = session.exec(
+            select(EmailDraft.to_email).where(EmailDraft.status.in_(open_states))  # type: ignore[attr-defined]
+        ).all()
+    return {e.strip().lower() for e in rows if e}
+
+
+def _mark_duplicate(post_id: int, email: str) -> None:
+    with session_scope() as session:
+        db = session.get(Post, post_id)
+        if db is None:
+            return
+        db.status = PostStatus.skipped
+        db.last_error = f"already emailed or drafted: {email}"
+        db.updated_at = utcnow()
+        session.add(db)
+    log.info("compose_skip_duplicate", post_id=post_id, to=email)
+
+
 def run(*, dry_run: bool = False) -> StageResult:
     settings = get_settings()
     cfg = settings.config.compose
@@ -190,9 +212,16 @@ def run(*, dry_run: bool = False) -> StageResult:
     your_headline = cfg.your_headline or (profile.headline or "")
 
     client = get_llm_client(settings)
-    succeeded = refused = failed = 0
+    succeeded = refused = failed = duplicates = 0
+    claimed = _emails_with_open_drafts()
 
     for post in posts:
+        email = post["contact_email"].strip().lower()
+        if email in claimed or cooldown_blocks(email):
+            _mark_duplicate(post["id"], email)
+            duplicates += 1
+            continue
+        claimed.add(email)
         try:
             draft = generate_draft(
                 resume_blob=resume_blob,
@@ -234,6 +263,10 @@ def run(*, dry_run: bool = False) -> StageResult:
                 refusal=draft.refusal,
                 subject=(draft.subject or "")[:80],
             )
+        except LlmUnavailable as exc:
+            details.append(f"stopped early, posts stay matched for next run: {exc}")
+            log.error("compose_llm_unavailable", error=str(exc))
+            break
         except Exception as exc:
             failed += 1
             log.exception("compose_failed", post_id=post["id"], error=str(exc))
@@ -244,7 +277,9 @@ def run(*, dry_run: bool = False) -> StageResult:
                     db.updated_at = utcnow()
                     session.add(db)
 
-    details.append(f"drafts={succeeded} refused={refused} failed={failed}")
+    details.append(
+        f"drafts={succeeded} refused={refused} failed={failed} skipped_already_emailed={duplicates}"
+    )
     return StageResult(
         stage="compose",
         dry_run=False,

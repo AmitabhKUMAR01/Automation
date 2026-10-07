@@ -11,7 +11,7 @@ from sqlmodel import col, select
 from outreach.config import get_settings
 from outreach.db.models import CompanyBlacklist, Post, PostStatus, utcnow
 from outreach.db.session import session_scope
-from outreach.llm import get_llm_client
+from outreach.llm import LlmUnavailable, get_llm_client
 from outreach.logging import get_logger
 from outreach.match.resume import load_or_build_profile
 from outreach.match.schema import MatchResult
@@ -265,6 +265,10 @@ def run(*, dry_run: bool = False, rescore_rejected: bool = False) -> StageResult
                 passed=result.score >= cutoff,
                 reasoning=result.reasoning[:240],
             )
+        except LlmUnavailable as exc:
+            details.append(f"stopped early, posts stay parsed for next run: {exc}")
+            log.error("match_llm_unavailable", error=str(exc))
+            break
         except Exception as exc:
             failed += 1
             log.exception("match_failed", post_id=post["id"], error=str(exc))

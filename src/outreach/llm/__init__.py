@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -110,17 +111,38 @@ class AnthropicClient:
         return LlmResponse(content=text, model=self.model, raw=data)
 
 
-# Paid-credit exhaustion only. Gemini's per-minute limit also says "exceeded your current quota",
-# and that one recovers, so it must stay transient.
-_QUOTA_HINTS = ("insufficient_quota", "credit_balance", "billing")
+# Gemini says "exceeded your current quota ... plan and billing details" for both its per-minute
+# and per-day limits, so the advertised retry delay is what tells them apart.
+_QUOTA_HINTS = ("insufficient_quota", "credit_balance")
+_RETRY_IN = re.compile(
+    r"(?:retry|try again) in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?", re.IGNORECASE
+)
+LONG_RETRY_SECONDS = 600
+
+
+class LlmUnavailable(RuntimeError):
+    """Every provider in the chain is out of credit or quota for this run."""
+
+
+def retry_after_seconds(body: str) -> float | None:
+    m = _RETRY_IN.search(body or "")
+    if not m or not any(m.groups()):
+        return None
+    h, mins, s = m.groups()
+    return int(h or 0) * 3600 + int(mins or 0) * 60 + float(s or 0)
 
 
 def _is_exhausted(exc: HttpError) -> bool:
-    """Provider/model is unusable for the rest of the run (no credit, bad key, retired model)."""
+    """Provider/model is unusable for the rest of the run (no credit, bad key, retired model, daily cap)."""
     if exc.status_code in {401, 402, 403, 404}:
         return True
+    if exc.status_code != 429:
+        return False
     body = (exc.body or "").lower()
-    return exc.status_code == 429 and any(h in body for h in _QUOTA_HINTS)
+    if any(h in body for h in _QUOTA_HINTS):
+        return True
+    wait = retry_after_seconds(body)
+    return wait is not None and wait >= LONG_RETRY_SECONDS
 
 
 def _is_transient(exc: HttpError) -> bool:
@@ -154,6 +176,11 @@ class FallbackLlmClient:
         last_exc: Exception | None = None
         now = time.monotonic()
         alive = [c for c in self.clients if c.provider not in self.dead]
+        if not alive:
+            raise LlmUnavailable(
+                "All LLM providers are out of credit or daily quota "
+                f"({', '.join(sorted(self.dead))}); add credit or another provider, or retry tomorrow"
+            )
         ready = [c for c in alive if self.cooling_until.get(c.provider, 0) <= now]
         # If everything is cooling down, still try rather than fail without a request
         for client in ready or alive:
@@ -175,10 +202,15 @@ class FallbackLlmClient:
                     )
                     continue
                 if _is_transient(exc):
-                    self.cooling_until[client.provider] = time.monotonic() + self.TRANSIENT_COOLDOWN_SECONDS
+                    wait = retry_after_seconds(exc.body or "") or self.TRANSIENT_COOLDOWN_SECONDS
+                    self.cooling_until[client.provider] = time.monotonic() + wait
                     log.warning("llm_provider_failed_trying_next", provider=client.provider, status=exc.status_code)
                     continue
                 raise
+        if not any(c.provider not in self.dead for c in self.clients):
+            raise LlmUnavailable(
+                f"All LLM providers are out of credit or daily quota ({', '.join(sorted(self.dead))})"
+            ) from last_exc
         raise RuntimeError(
             f"All LLM providers failed ({', '.join(c.provider for c in self.clients)}): {last_exc}"
         ) from last_exc
@@ -205,6 +237,20 @@ def _build(name: str, settings: Settings, *, all_gemini_models: bool) -> list[Ll
             )
             for model in models
         ]
+    if name == "groq" and s.groq_api_key:
+        models = [m.strip() for m in s.groq_models.split(",") if m.strip()]
+        if not all_gemini_models:
+            models = models[:1]
+        return [
+            OpenAIClient(
+                s.groq_api_key,
+                model,
+                timeout_seconds=timeout,
+                base_url=s.groq_base_url,
+                provider=f"groq/{model}",
+            )
+            for model in models
+        ]
     if name == "anthropic" and s.anthropic_api_key:
         return [AnthropicClient(s.anthropic_api_key, s.anthropic_model, timeout_seconds=timeout)]
     return []
@@ -228,6 +274,6 @@ def get_llm_client(settings: Settings | None = None) -> LlmClient:
     if not built:
         raise RuntimeError(
             f"LLM_PROVIDER={provider} needs its API key in .env "
-            "(OPENAI_API_KEY / GEMINI_API_KEY / ANTHROPIC_API_KEY)"
+            "(OPENAI_API_KEY / GEMINI_API_KEY / GROQ_API_KEY / ANTHROPIC_API_KEY)"
         )
     return built[0]

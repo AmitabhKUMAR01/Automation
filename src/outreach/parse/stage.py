@@ -10,9 +10,10 @@ from sqlmodel import select
 from outreach.config import get_settings
 from outreach.db.models import Post, PostStatus, utcnow
 from outreach.db.session import session_scope
-from outreach.llm import get_llm_client
+from outreach.llm import LlmUnavailable, get_llm_client
 from outreach.logging import get_logger
 from outreach.parse.emails import extract_emails
+from outreach.send.guards import cooldown_blocks
 from outreach.parse.schema import ParsedPostFields
 from outreach.protocols import LlmClient, LlmMessage
 from outreach.stages import StageResult
@@ -112,6 +113,18 @@ def apply_parsed_fields(post: Post, fields: ParsedPostFields, regex_emails: list
     post.updated_at = utcnow()
 
 
+def _mark_without_llm(post_id: int, status: PostStatus, email: str | None, note: str | None) -> None:
+    with session_scope() as session:
+        db_post = session.get(Post, post_id)
+        if db_post is None:
+            return
+        db_post.status = status
+        db_post.contact_email = email
+        db_post.last_error = note
+        db_post.updated_at = utcnow()
+        session.add(db_post)
+
+
 def run(*, dry_run: bool = False) -> StageResult:
     settings = get_settings()
     with session_scope() as session:
@@ -154,11 +167,28 @@ def run(*, dry_run: bool = False) -> StageResult:
     succeeded = 0
     failed = 0
     needs_enrichment = 0
+    already_emailed = 0
+    llm_down: str | None = None
 
     for post in posts:
         post_id = post["id"]
+        regex_emails = extract_emails(post["raw_text"])
+        # Enrichment is the only path for email-less posts, so the LLM adds nothing there;
+        # free-tier quotas are too small to spend on them.
+        if not regex_emails:
+            _mark_without_llm(post_id, PostStatus.needs_enrichment, None, None)
+            needs_enrichment += 1
+            continue
+        fresh = [e for e in regex_emails if not cooldown_blocks(e)]
+        if not fresh:
+            _mark_without_llm(
+                post_id, PostStatus.skipped, regex_emails[0], f"already emailed: {regex_emails[0]}"
+            )
+            already_emailed += 1
+            continue
+        if llm_down:
+            continue
         try:
-            regex_emails = extract_emails(post["raw_text"])
             fields = extract_with_llm(
                 post["raw_text"],
                 client=client,
@@ -169,7 +199,7 @@ def run(*, dry_run: bool = False) -> StageResult:
                 db_post = session.get(Post, post_id)
                 if db_post is None:
                     continue
-                apply_parsed_fields(db_post, fields, regex_emails)
+                apply_parsed_fields(db_post, fields, fresh)
                 if db_post.status == PostStatus.needs_enrichment:
                     needs_enrichment += 1
                 session.add(db_post)
@@ -180,6 +210,9 @@ def run(*, dry_run: bool = False) -> StageResult:
                 email=bool(regex_emails or fields.contact_email),
                 role=fields.role_title,
             )
+        except LlmUnavailable as exc:
+            llm_down = str(exc)
+            log.error("parse_llm_unavailable", error=llm_down)
         except Exception as exc:
             failed += 1
             log.exception("parse_failed", post_id=post_id, error=str(exc))
@@ -191,7 +224,12 @@ def run(*, dry_run: bool = False) -> StageResult:
                     # leave status=ingested so a re-run retries this post
                     session.add(db_post)
 
-    details.append(f"ok={succeeded} failed={failed} needs_enrichment={needs_enrichment}")
+    details.append(
+        f"ok={succeeded} failed={failed} needs_enrichment={needs_enrichment} "
+        f"already_emailed={already_emailed}"
+    )
+    if llm_down:
+        details.append(f"stopped early, posts left as ingested for next run: {llm_down}")
     return StageResult(
         stage="parse",
         dry_run=False,

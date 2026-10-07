@@ -3,7 +3,7 @@
 import pytest
 
 from outreach.http_util import HttpError
-from outreach.llm import FallbackLlmClient
+from outreach.llm import FallbackLlmClient, LlmUnavailable
 from outreach.protocols import LlmMessage, LlmResponse
 
 MSG = [LlmMessage(role="user", content="hi")]
@@ -50,6 +50,39 @@ def test_gemini_rate_limit_is_not_treated_as_exhausted() -> None:
     assert "gemini/flash" not in client.dead
 
 
+def test_gemini_daily_cap_is_exhausted_despite_billing_wording() -> None:
+    daily = HttpError(
+        "429",
+        status_code=429,
+        body="You exceeded your current quota, please check your plan and billing details. "
+        "limit: 20, model: gemini-flash\nPlease retry in 20h44m13.95s.",
+    )
+    flash = Fake("gemini/flash", daily)
+    client = FallbackLlmClient([flash, Fake("gemini/lite")])
+    client.complete(MSG)
+    assert "gemini/flash" in client.dead
+
+
+def test_groq_daily_limit_wording_is_exhausted_but_tpm_limit_is_not() -> None:
+    rpd = HttpError("429", status_code=429, body="requests per day (RPD): Limit 1000. Please try again in 1h2m3.5s.")
+    tpm = HttpError("429", status_code=429, body="tokens per minute (TPM). Please try again in 7.66s.")
+    client = FallbackLlmClient([Fake("groq/a", rpd), Fake("groq/b", tpm), Fake("gemini")])
+    client.complete(MSG)
+    assert "groq/a" in client.dead
+    assert "groq/b" not in client.dead
+
+
+def test_every_provider_out_of_quota_raises_llm_unavailable_without_calls() -> None:
+    quota = HttpError("429", status_code=429, body=QUOTA_BODY)
+    openai = Fake("openai", quota)
+    client = FallbackLlmClient([openai])
+    with pytest.raises(LlmUnavailable):
+        client.complete(MSG)
+    with pytest.raises(LlmUnavailable):
+        client.complete(MSG)
+    assert openai.calls == 1
+
+
 def test_bad_request_is_not_hidden() -> None:
     client = FallbackLlmClient([Fake("openai", HttpError("400", status_code=400, body="bad")), Fake("gemini")])
     with pytest.raises(HttpError):
@@ -59,5 +92,5 @@ def test_bad_request_is_not_hidden() -> None:
 def test_all_providers_down_raises_clear_error() -> None:
     dead = HttpError("401", status_code=401, body="invalid key")
     client = FallbackLlmClient([Fake("openai", dead), Fake("gemini", dead)])
-    with pytest.raises(RuntimeError, match="All LLM providers failed"):
+    with pytest.raises(RuntimeError, match="All LLM providers"):
         client.complete(MSG)

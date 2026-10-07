@@ -176,7 +176,7 @@ Debug artifacts: `data/debug/linkedin_feed_last.png` and `.html` (saved when a s
 | Companies never to message / invite | `network.exclude_companies` |
 | Invite caps / delays | `network.prospects.daily_cap`, `weekly_cap`, `delay_seconds_*` |
 | Invite targets (titles, cities, degree) | `network.prospects.titles`, `locations`, `network` |
-| LLM provider order / free fallback | `.env`: `LLM_PROVIDERS=openai,gemini`, `GEMINI_API_KEY`, `GEMINI_MODEL` |
+| LLM provider order / free fallback | `.env`: `LLM_PROVIDERS=openai,groq,gemini`, `GROQ_API_KEY`, `GEMINI_API_KEY`, `GROQ_MODELS`, `GEMINI_MODELS` |
 uv run pipeline ingest -s all
 uv run pipeline parse
 uv run pipeline match
